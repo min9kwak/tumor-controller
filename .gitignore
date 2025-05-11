@@ -133,9 +133,10 @@ checkpoints/
 references/
 data/
 wandb/
-original_MRI_dimension.xlsx
+paper/
 plots/
 outputs/
+scratch/
 
 # IDE
 .vscode
