@@ -17,6 +17,11 @@ os.makedirs(normal_out_dir, exist_ok=True)
 tumor_lower = 1000
 tumor_upper = 3000
 
+# Min-Max Scaling
+def normalize_volume(vol):
+    vol_min, vol_max = np.min(vol), np.max(vol)
+    return (vol - vol_min) / (vol_max - vol_min + 1e-8)  # prevent div by 0
+
 # Z-slice
 slice_range = list(range(80, 130))  # 155 total slices
 
@@ -39,6 +44,9 @@ for patient_dir in tqdm.tqdm(patient_dirs):
     t1ce = nib.load(t1ce_filename).get_fdata().transpose(2, 0, 1)  # (Z, H, W)
     t2 = nib.load(t2_filename).get_fdata().transpose(2, 0, 1)
     seg = nib.load(seg_filename).get_fdata().transpose(2, 0, 1)
+
+    t1ce = normalize_volume(t1ce)
+    t2 = normalize_volume(t2)
 
     for z in slice_range:
         # Padding and Shaping: (1, H, W)
