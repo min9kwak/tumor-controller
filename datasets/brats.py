@@ -1,9 +1,9 @@
-from torch.utils.data import Dataset
-from sklearn.model_selection import train_test_split
-
 import os
 import pickle
-import numpy as np
+import torch
+
+from torch.utils.data import Dataset
+from sklearn.model_selection import train_test_split
 
 
 class BraTSProcessor(object):
@@ -16,8 +16,8 @@ class BraTSProcessor(object):
 
         assert modality in ['t1ce', 't2', 't1ce+t2']
 
-        self.tumor_dir = os.path.join(data_root, 'normal')
-        self.healthy_dir = os.path.join()
+        self.tumor_dir = os.path.join(data_root, 'tumor')
+        self.healthy_dir = os.path.join(data_root, 'healthy')
 
         self.modality: list = modality.split(modality)
         self.validation_size = validation_size
@@ -29,12 +29,12 @@ class BraTSProcessor(object):
         Process the tumor and healthy directories to create datasets.
         Returns two datasets: tumor_set and healthy_set.
         """
-        tumor_set = self.create_dataset(self.tumor_dir)
-        healthy_set = self.create_dataset(self.healthy_dir)
+        tumor_set = self.create_dataset(self.tumor_dir, True)
+        healthy_set = self.create_dataset(self.healthy_dir, False)
 
         return dict(tumor=tumor_set, healthy=healthy_set)
 
-    def create_dataset(self, data_dir):
+    def create_dataset(self, data_dir, is_tumor=True):
         """
         Create a dataset from the given directory (tumor or healthy).
         Each entry includes image paths for the specified modalities and the corresponding segmentation path.
@@ -43,20 +43,18 @@ class BraTSProcessor(object):
 
         for filename in os.listdir(data_dir):
             # Extract patient ID and modality from the filename
-            patient_id, modality = filename.split('-')[0], filename.split('-')[-1].split('.')[0]
+            patient_id, modality, z = filename.replace('.pkl', '').split('-')
 
             # Process only if the modality matches
             if modality in self.modality:
-                seg_filename = f"{patient_id}-{filename.split('-')[1]}-seg.pkl"
-                seg_path = os.path.join(data_dir, seg_filename)
+                if is_tumor:
+                    seg_filename = filename.replace('-seg-', f'{modality}')
+                    seg_path = os.path.join(data_dir, seg_filename)
+                else:
+                    seg_path = 'healthy'
 
-                # Ensure the segmentation file exists
-                if os.path.exists(seg_path):
-                    dataset.append({
-                        "image": os.path.join(data_dir, filename),
-                        "seg": seg_path,
-                        "number": f"{patient_id}-{filename.replace('.pkl', '')}"
-                    })
+                # TODO: add edge map
+                dataset.append(dict(image=os.path.join(data_dir, filename), seg=seg_path))
 
         return dataset
 
@@ -74,13 +72,18 @@ class BraTSDataset(Dataset):
 
         with open(self.dataset[idx]['image'], 'rb') as fb:
             image = pickle.load(fb)
-        with open(self.dataset[idx]['seg'], 'rb') as fb:
-            seg = pickle.load(fb)
-
         if self.image_transform:
             image = self.image_transform(image)
-        if self.seg_transform:
-            seg = self.seg_transform(seg)
+        
+        # TODO: add edge map
+        
+        if self.label == 1:
+            with open(self.dataset[idx]['seg'], 'rb') as fb:
+                seg = pickle.load(fb)
+            if self.seg_transform:
+                seg = self.seg_transform(seg)
+        elif self.label == 0:
+            seg = torch.zeros_like(image, dtype=torch.long)
 
         out = dict(x=image, seg=seg, y=self.label, idx=idx)
 
@@ -89,24 +92,26 @@ class BraTSDataset(Dataset):
     
 if __name__ == '__main__':
 
+    from torch.utils.data import DataLoader
+    import matplotlib.pyplot as plt
+    from datasets.transforms import make_transforms
+    
     processor = BraTSProcessor()
     datasets = processor.process()
 
-    batch_size = 4
+    image_transform, seg_transform = make_transforms(image_size=512)
 
-    from torch.utils.data import DataLoader
-    import matplotlib.pyplot as plt
+    batch_size = 2
 
-    test_set = BraTSDataset(dataset=datasets['test'], transform=None, masking='random_patch',
-                            patch_size=4, patch_ratio=0.3)
+    
+    test_set = BraTSDataset(dataset=datasets['tumor']['test'],
+                            image_transform=image_transform,
+                            seg_transform=seg_transform,
+                            label=1)
     test_loader = DataLoader(test_set, batch_size=batch_size, shuffle=True)
     for batch in test_loader:
         for idx in range(batch_size):
             plt.imshow(batch['x'][idx][0], cmap='gray')
             plt.imshow(batch['seg'][idx][0], cmap='Accent', alpha=0.2)
-            plt.imshow(batch['mask'][idx][0], cmap='Reds', alpha=0.5)
             plt.show()
-            import torch
-            if torch.sum(batch['mask'][idx][0]).item() != 0:
-                break
         break
