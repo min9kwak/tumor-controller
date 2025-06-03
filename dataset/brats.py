@@ -59,6 +59,46 @@ class BraTSProcessor(object):
         return dataset
 
 
+
+class BrainTumorControlNetDataset(Dataset):
+    def __init__(self, json_path, image_size=512):
+        with open(json_path, 'r') as f:
+            self.data = json.load(f)
+            
+        self.image_transforms = transforms.Compose([
+            transforms.Resize(image_size, interpolation=transforms.InterpolationMode.BILINEAR),
+            transforms.CenterCrop(image_size),
+            transforms.ToTensor(),
+            transforms.Normalize([0.5], [0.5]),
+        ])
+        
+        self.conditioning_transforms = transforms.Compose([
+            transforms.Resize(image_size, interpolation=transforms.InterpolationMode.BILINEAR),
+            transforms.CenterCrop(image_size),
+            transforms.ToTensor(),
+        ])
+        
+    def __len__(self):
+        return len(self.data)
+    
+    def __getitem__(self, idx):
+        item = self.data[idx]
+        
+        # Load and transform the target image (tumor)
+        image = Image.open(item['image']).convert('RGB')
+        pixel_values = self.image_transforms(image)
+        
+        # Load and transform the conditioning image (healthy)
+        conditioning_image = Image.open(item['conditioning_image']).convert('RGB')
+        conditioning_pixel_values = self.conditioning_transforms(conditioning_image)
+        
+        return {
+            'pixel_values': pixel_values,
+            'conditioning_pixel_values': conditioning_pixel_values,
+            'text': item['text']
+        }
+    
+
 class BraTSDataset(Dataset):
     # TODO: remove test_flag
     def __init__(self, dataset, image_transform, seg_transform, label):
@@ -94,7 +134,7 @@ if __name__ == '__main__':
 
     from torch.utils.data import DataLoader
     import matplotlib.pyplot as plt
-    from datasets.transforms import make_transforms
+    from dataset.transforms import make_transforms
     
     processor = BraTSProcessor()
     datasets = processor.process()
