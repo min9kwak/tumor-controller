@@ -7,6 +7,7 @@ import nibabel as nib
 import numpy as np
 import pandas as pd
 from monai.transforms import SpatialPad
+import sys
 
 from utils.util import set_env
 
@@ -14,30 +15,55 @@ from utils.util import set_env
 config = dict(server='psc')
 config = set_env(config)
 
-config['data_root']
-tumor_dir = os.path.join(config['data_root'], 'tumor')
-healthy_dir = os.path.join(config['data_root'], 'healthy')
+data_root = config['data_root']
+tumor_dir = os.path.join(data_root, 'tumor')
+healthy_dir = os.path.join(data_root, 'healthy')
+
+# Check if data_root exists
+if not os.path.exists(data_root):
+    print(f"Error: data_root directory does not exist: {data_root}")
+    sys.exit(1)
+
+# Check if required CSV files exist
+survival_info_path = os.path.join(data_root, 'survival_info.csv')
+tumor_stats_path = os.path.join(data_root, 'tumor_slice_stats.csv')
+
+missing_files = []
+if not os.path.exists(survival_info_path):
+    missing_files.append(survival_info_path)
+if not os.path.exists(tumor_stats_path):
+    missing_files.append(tumor_stats_path)
+
+if missing_files:
+    print("Error: Required files do not exist:")
+    for f in missing_files:
+        print(f"  - {f}")
+    sys.exit(1)
 
 # prepare demo info and tumor info
-demo_info = pd.read_csv(os.path.join(config['data_root'], 'survival_info.csv'))
-tumor_info = pd.read_csv(os.path.join(config['data_root'], 'tumor_slice_stats.csv'), dtype={'patient_id': str})
+demo_info = pd.read_csv(survival_info_path)
+tumor_info = pd.read_csv(tumor_stats_path, dtype={'patient_id': str})
 demo_info['patient_id'] = demo_info['Brats20ID'].str.split('_').str[-1]
 
-# preprocess tumor
+# set directory
+brats_dir = os.path.join(os.path.dirname(data_root), 'BraTS', 'MICCAI_BraTS2020_TrainingData', 'MICCAI_BraTS2020_TrainingData')
 
+# Check if BraTS directory exists
+if not os.path.exists(brats_dir):
+    print(f"Error: BraTS data directory does not exist: {brats_dir}")
+    sys.exit(1)
 
+# Check if BraTS directory contains any data
+if not any(os.path.isdir(os.path.join(brats_dir, d)) for d in os.listdir(brats_dir)):
+    print(f"Error: No patient directories found in BraTS directory: {brats_dir}")
+    sys.exit(1)
 
-
-# preprocess healthy
-
-
-
-
-brats_dir = 'D:/data/BraTS/MICCAI_BraTS2020_TrainingData/MICCAI_BraTS2020_TrainingData'
-out_dir   = 'D:/data/tumor-controller'
-tumor_out_dir  = os.path.join(out_dir, "tumor")
+out_dir = data_root
+tumor_out_dir = os.path.join(out_dir, "tumor")
 normal_out_dir = os.path.join(out_dir, "healthy")
-os.makedirs(tumor_out_dir,  exist_ok=True)
+
+# Create output directories
+os.makedirs(tumor_out_dir, exist_ok=True)
 os.makedirs(normal_out_dir, exist_ok=True)
 
 # hyperparameters
@@ -55,6 +81,7 @@ param = {
 with open(os.path.join(out_dir, "preprocessing_config.json"), "w") as f:
     json.dump(param, f, indent=4)
 
+# set hyperparameters
 slice_range  = param["slice_range"]
 tumor_lower  = param["tumor_lower"]
 tumor_upper  = param["tumor_upper"]

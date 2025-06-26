@@ -137,6 +137,7 @@ paper/
 plots/
 outputs/
 scratch/
+scripts/
 
 # IDE
 .vscode

@@ -1,157 +1,186 @@
 import os
+from collections import defaultdict
+import numpy as np
+import copy
 import pickle
 import torch
+from typing import List
 
 from torch.utils.data import Dataset
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import StratifiedGroupKFold
+
+from torchvision import transforms
+from transformers import AutoTokenizer
+
+from utils.util import set_env
 
 
 class BraTSProcessor(object):
     def __init__(self,
-                 data_root: str = 'D:/data/tumor-controller',
-                 modality: str = 't1ce',
-                 validation_size: float = 0.1,
-                 test_size: float = 0.1,
-                 random_state: int = 2023):
+                 config: dict = None,
+                 tokenizer: AutoTokenizer = None):
+        
+        self.config = config
+        self.tokenizer = tokenizer
 
-        assert modality in ['t1ce', 't2', 't1ce+t2']
+        assert self.config['modality'] in ['t1ce', 't2', 't1ce+t2']
+        assert 0 <= self.config['fold_index'] < self.config['n_splits'], \
+            f"fold_index must be between 0 and {self.config['n_splits'] - 1}"
+        
+        modality = self.config['modality']
+        self.modality = modality.split('+') if '+' in modality else [modality]
 
-        self.tumor_dir = os.path.join(data_root, 'tumor')
-        self.healthy_dir = os.path.join(data_root, 'healthy')
-
-        self.modality: list = modality.split(modality)
-        self.validation_size = validation_size
-        self.test_size = test_size
-        self.random_state = random_state
-
-    def process(self):
-        """
-        Process the tumor and healthy directories to create datasets.
-        Returns two datasets: tumor_set and healthy_set.
-        """
-        tumor_set = self.create_dataset(self.tumor_dir, True)
-        healthy_set = self.create_dataset(self.healthy_dir, False)
-
-        return dict(tumor=tumor_set, healthy=healthy_set)
-
-    def create_dataset(self, data_dir, is_tumor=True):
-        """
-        Create a dataset from the given directory (tumor or healthy).
-        Each entry includes image paths for the specified modalities and the corresponding segmentation path.
-        """
-        dataset = []
-
-        for filename in os.listdir(data_dir):
-            # Extract patient ID and modality from the filename
-            patient_id, modality, z = filename.replace('.pkl', '').split('-')
-
-            # Process only if the modality matches
-            if modality in self.modality:
-                if is_tumor:
-                    seg_filename = filename.replace('-seg-', f'{modality}')
-                    seg_path = os.path.join(data_dir, seg_filename)
-                else:
-                    seg_path = 'healthy'
-
-                # TODO: add edge map
-                dataset.append(dict(image=os.path.join(data_dir, filename), seg=seg_path))
-
-        return dataset
-
-
-
-class BrainTumorControlNetDataset(Dataset):
-    def __init__(self, json_path, image_size=512):
-        with open(json_path, 'r') as f:
-            self.data = json.load(f)
+        self.tumor_dir = os.path.join(config['data_root'], 'meta', 'tumor')
+        self.healthy_dir = os.path.join(config['data_root'], 'meta', 'healthy')        
+        self.random_state = self.config['random_state']
+        self.n_splits = self.config['n_splits']
+        self.fold_index = self.config['fold_index']
+    
+    def load_data(self):
+        """Load data files and perform basic labeling."""
+        tumor_files = [f for f in os.listdir(self.tumor_dir) if 't1ce' in f]
+        healthy_files = [f for f in os.listdir(self.healthy_dir) if 't1ce' in f]
+        
+        # Convert to full paths
+        tumor_files = [os.path.join(self.tumor_dir, f) for f in tumor_files]
+        healthy_files = [os.path.join(self.healthy_dir, f) for f in healthy_files]
+        
+        all_files = tumor_files + healthy_files
+        labels = [1] * len(tumor_files) + [0] * len(healthy_files)
+        # Extract patient IDs from full paths
+        groups = [os.path.basename(f).split('-')[0] for f in all_files]
+        
+        return all_files, labels, groups
+    
+    def split_data(self, all_files, labels, groups):
+        """Split data into train/test sets and validate the split.
+        
+        Args:
+            all_files: List of all file paths (full directory paths)
+            labels: List of corresponding labels (1 for tumor, 0 for healthy)
+            groups: List of patient IDs for stratification
             
-        self.image_transforms = transforms.Compose([
-            transforms.Resize(image_size, interpolation=transforms.InterpolationMode.BILINEAR),
-            transforms.CenterCrop(image_size),
-            transforms.ToTensor(),
-            transforms.Normalize([0.5], [0.5]),
-        ])
+        Returns:
+            Dictionary containing train and test splits for both tumor and healthy cases
+        """
+        kfold = StratifiedGroupKFold(n_splits=self.n_splits, shuffle=True, random_state=self.random_state)
         
-        self.conditioning_transforms = transforms.Compose([
-            transforms.Resize(image_size, interpolation=transforms.InterpolationMode.BILINEAR),
-            transforms.CenterCrop(image_size),
-            transforms.ToTensor(),
-        ])
+        # Get the specified fold
+        for i, (train_idx, test_idx) in enumerate(kfold.split(all_files, labels, groups)):
+            if i == self.fold_index:
+                break
+        else:
+            raise ValueError(f"Fold index {self.fold_index} is out of range")
+            
+        train_files = [all_files[i] for i in train_idx]
+        test_files = [all_files[i] for i in test_idx]
+        train_labels = [labels[i] for i in train_idx]
+        test_labels = [labels[i] for i in test_idx]
         
-    def __len__(self):
-        return len(self.data)
-    
-    def __getitem__(self, idx):
-        item = self.data[idx]
+        # Split by condition
+        tumor_train = [f for f, y in zip(train_files, train_labels) if y == 1]
+        healthy_train = [f for f, y in zip(train_files, train_labels) if y == 0]
+        tumor_test = [f for f, y in zip(test_files, test_labels) if y == 1]
+        healthy_test = [f for f, y in zip(test_files, test_labels) if y == 0]
         
-        # Load and transform the target image (tumor)
-        image = Image.open(item['image']).convert('RGB')
-        pixel_values = self.image_transforms(image)
+        # Verify split validity using basenames
+        train_pids = set([os.path.basename(f).split('-')[0] for f in train_files])
+        test_pids = set([os.path.basename(f).split('-')[0] for f in test_files])
+        overlap = train_pids & test_pids
+        assert len(overlap) == 0
+        assert len(all_files) == len(tumor_train) + len(healthy_train) + len(tumor_test) + len(healthy_test)
         
-        # Load and transform the conditioning image (healthy)
-        conditioning_image = Image.open(item['conditioning_image']).convert('RGB')
-        conditioning_pixel_values = self.conditioning_transforms(conditioning_image)
-        
-        return {
-            'pixel_values': pixel_values,
-            'conditioning_pixel_values': conditioning_pixel_values,
-            'text': item['text']
+        # TODO: load data info (file path) -> dictionary info
+        # TODO: tokenize prompts
+        data_filenames = {
+            'train': {'tumor': tumor_train, 'healthy': healthy_train},
+            'test': {'tumor': tumor_test, 'healthy': healthy_test}
         }
-    
-
-class BraTSDataset(Dataset):
-    # TODO: remove test_flag
-    def __init__(self, dataset, image_transform, seg_transform, label):
-
-        self.dataset = dataset
-        self.image_transform = image_transform
-        self.seg_transform = seg_transform
-        self.label = label
-
-    def __getitem__(self, idx):
-
-        with open(self.dataset[idx]['image'], 'rb') as fb:
-            image = pickle.load(fb)
-        if self.image_transform:
-            image = self.image_transform(image)
+        data_info = self.load_data_info(data_filenames)
+        data_info = self.tokenize_prompts(data_info, self.tokenizer)
         
-        # TODO: add edge map
-        
-        if self.label == 1:
-            with open(self.dataset[idx]['seg'], 'rb') as fb:
-                seg = pickle.load(fb)
-            if self.seg_transform:
-                seg = self.seg_transform(seg)
-        elif self.label == 0:
-            seg = torch.zeros_like(image, dtype=torch.long)
-
-        out = dict(x=image, seg=seg, y=self.label, idx=idx)
-
-        return out
-
+        return data_info
     
+    def load_data_info(self, data_filenames: dict):
+        """Load data info from file paths."""
+        data_info = defaultdict(lambda: defaultdict(list))
+        for split in ['train', 'test']:
+            for condition in ['tumor', 'healthy']:
+                file_names = data_filenames[split][condition]
+                for file_name in file_names:
+                    with open(file_name, 'r') as f:
+                        data = json.load(f)
+                    data_info[split][condition].append(data)
+        return dict(data_info)
+
+    def print_summary(self, data_info):
+        for split in ['train', 'test']:
+            t, h = len(data_info[split]['tumor']), len(data_info[split]['healthy'])
+            print(f"{split.title()} - Tumor: {t}, Healthy: {h}, Total: {t + h}")
+    
+    def process(self):
+        """Execute the complete data processing pipeline."""
+        all_files, labels, groups = self.load_data()
+        data_info = self.split_data(all_files, labels, groups)
+        self.print_summary(data_info)
+        return data_info
+    
+    def tokenize_prompts(self, data_info: dict, tokenizer: List[AutoTokenizer]):
+        
+        np.random.seed(self.random_state)
+        
+        for split in ['train', 'test']:
+            for condition in ['tumor', 'healthy']:
+                for data in data_info[split][condition]:
+                    # randomly mask prompt for training data
+                    if split == 'train':                    
+                        p = np.random.random()
+                        if p < self.config['p_prompt_mask']:
+                            prompt = ""
+                        else:
+                            prompt = data['prompt']
+                    else:
+                        prompt = data['prompt']
+                    
+                    token = tokenizer(prompt).input_ids
+                    data['token'] = token
+
+        return data_info
+
+
+def create_transforms(image_size=512):
+    
+    image_transforms = transforms.Compose([
+        transforms.Resize(image_size, interpolation=transforms.InterpolationMode.BICUBIC),
+        transforms.ToTensor(),
+        transforms.Normalize([0.5], [0.5]),
+    ])
+
+    conditioning_transforms = transforms.Compose([
+        transforms.Resize(image_size, interpolation=transforms.InterpolationMode.BICUBIC),
+        transforms.ToTensor(),
+    ])
+    
+    return image_transforms, conditioning_transforms
+
+
 if __name__ == '__main__':
-
-    from torch.utils.data import DataLoader
-    import matplotlib.pyplot as plt
-    from dataset.transforms import make_transforms
     
-    processor = BraTSProcessor()
-    datasets = processor.process()
+    import json
 
-    image_transform, seg_transform = make_transforms(image_size=512)
+    # 0. set environment
+    config = {'server': 'psc',
+              'p_prompt_mask': 0.5,
+              'modality': 't1ce',
+              'n_splits': 10,
+              'fold_index': 0,
+              'random_state': 2025}
+    config = set_env(config)
 
-    batch_size = 2
+    # 1. prepare dataset
+    tokenizer = AutoTokenizer.from_pretrained('runwayml/stable-diffusion-v1-5',
+                                              subfolder='tokenizer')
+    processor = BraTSProcessor(config=config, tokenizer=tokenizer)
+    data_info = processor.process()
 
-    
-    test_set = BraTSDataset(dataset=datasets['tumor']['test'],
-                            image_transform=image_transform,
-                            seg_transform=seg_transform,
-                            label=1)
-    test_loader = DataLoader(test_set, batch_size=batch_size, shuffle=True)
-    for batch in test_loader:
-        for idx in range(batch_size):
-            plt.imshow(batch['x'][idx][0], cmap='gray')
-            plt.imshow(batch['seg'][idx][0], cmap='Accent', alpha=0.2)
-            plt.show()
-        break
+    print(data_info['train']['tumor'][0])
