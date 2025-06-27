@@ -32,8 +32,6 @@ class BraTSProcessor(object):
             "n_splits must be greater than 1"
         assert self.config['fold_index'] >= 0 and self.config['fold_index'] < self.config['n_splits'], \
             f"fold_index must be between 0 and {self.config['n_splits'] - 1}"
-        assert self.config['resolution'] % 8 == 0, \
-            f"resolution must be divisible by 8, but got {self.config['resolution']}"
         
         modality = self.config['modality']
         self.modality = modality.split('+') if '+' in modality else [modality]
@@ -84,6 +82,15 @@ class BraTSProcessor(object):
         test_files = [all_files[i] for i in test_idx]
         train_labels = [labels[i] for i in train_idx]
         test_labels = [labels[i] for i in test_idx]
+
+        # max_train_samples
+        if self.config.get('max_train_samples', None) is not None:
+            np.random.seed(self.seed)
+            selected_idx = np.random.choice(len(train_files),
+                                            size=min(self.config["max_train_samples"], len(train_files)),
+                                            replace=False)
+            train_files = [train_files[i] for i in selected_idx]
+            train_labels = [train_labels[i] for i in selected_idx]
         
         # Split by condition
         tumor_train = [f for f, y in zip(train_files, train_labels) if y == 1]
@@ -96,10 +103,12 @@ class BraTSProcessor(object):
         test_pids = set([os.path.basename(f).split('-')[0] for f in test_files])
         overlap = train_pids & test_pids
         assert len(overlap) == 0
-        assert len(all_files) == len(tumor_train) + len(healthy_train) + len(tumor_test) + len(healthy_test)
         
-        # TODO: load data info (file path) -> dictionary info
-        # TODO: tokenize prompts
+        if self.config.get('max_train_samples', None) is not None:
+            assert self.config['max_train_samples'] == len(tumor_train) + len(healthy_train)
+        else:
+            assert len(all_files) == len(tumor_train) + len(healthy_train) + len(tumor_test) + len(healthy_test)
+        
         data_filenames = {
             'train': {'tumor': tumor_train, 'healthy': healthy_train},
             'test': {'tumor': tumor_test, 'healthy': healthy_test}
@@ -165,7 +174,8 @@ class BraTSProcessor(object):
 
 
 def create_transforms(resolution=512):
-    
+    assert resolution % 8 == 0, f"resolution must be divisible by 8, but got {resolution}"
+        
     image_transforms = transforms.Compose([
         transforms.ToTensor(),
         transforms.Resize((resolution, resolution), interpolation=transforms.InterpolationMode.BICUBIC),
@@ -181,7 +191,7 @@ def create_transforms(resolution=512):
     return image_transforms, conditioning_transforms
 
 
-def custom_collate_fn(batch):
+def collate_fn(batch):
     return {
         'image': torch.stack([item['image'] for item in batch]),
         'edge': torch.stack([item['edge'] for item in batch]),
@@ -222,6 +232,7 @@ class BraTSDataset(Dataset):
 if __name__ == '__main__':
     
     from torch.utils.data import DataLoader
+    from accelerate import Accelerator
     
     # 0. set environment
     config = {'server': 'psc',
@@ -229,14 +240,19 @@ if __name__ == '__main__':
               'modality': 't1ce',
               'n_splits': 10,
               'fold_index': 0,
-              'seed': 2025}
+              'seed': 2025,
+              'max_train_samples': 4000}
     config = set_env(config)
 
     # 1. prepare dataset
     tokenizer = AutoTokenizer.from_pretrained('runwayml/stable-diffusion-v1-5',
-                                              subfolder='tokenizer')
+                                              subfolder='tokenizer',
+                                              cache_dir=config['cache_dir'])
     processor = BraTSProcessor(config=config, tokenizer=tokenizer)
-    data_info = processor.process()
+
+    accelerator = Accelerator()
+    with accelerator.main_process_first():
+        data_info = processor.process()
 
     train_data_info = data_info['train']['tumor'] + data_info['train']['healthy']
     import pickle
@@ -252,7 +268,7 @@ if __name__ == '__main__':
     train_set = BraTSDataset(train_data_info, image_transforms, conditioning_transforms)
 
     # 3. create dataloader
-    train_loader = DataLoader(train_set, batch_size=4, shuffle=True, collate_fn=custom_collate_fn)
+    train_loader = DataLoader(train_set, batch_size=4, shuffle=True, collate_fn=collate_fn)
     for batch in train_loader:
         print("batch['image'].shape", batch['image'].shape)
         print("batch['edge'].shape", batch['edge'].shape)
