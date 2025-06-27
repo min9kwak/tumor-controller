@@ -1,16 +1,17 @@
 import os
-from collections import defaultdict
+import json
 import numpy as np
-import copy
 import pickle
+import tqdm
 import torch
+
+from collections import defaultdict
 from typing import List
 
 from torch.utils.data import Dataset
-from sklearn.model_selection import StratifiedGroupKFold
-
 from torchvision import transforms
 from transformers import AutoTokenizer
+from sklearn.model_selection import StratifiedGroupKFold
 
 from utils.util import set_env
 
@@ -107,7 +108,7 @@ class BraTSProcessor(object):
         for split in ['train', 'test']:
             for condition in ['tumor', 'healthy']:
                 file_names = data_filenames[split][condition]
-                for file_name in file_names:
+                for file_name in tqdm.tqdm(file_names, desc=f'Loading {split}-{condition}'):
                     with open(file_name, 'r') as f:
                         data = json.load(f)
                     data_info[split][condition].append(data)
@@ -126,24 +127,32 @@ class BraTSProcessor(object):
         return data_info
     
     def tokenize_prompts(self, data_info: dict, tokenizer: List[AutoTokenizer]):
-        
+        """Tokenize prompts and add labels to data_info."""
         np.random.seed(self.random_state)
-        
+
         for split in ['train', 'test']:
             for condition in ['tumor', 'healthy']:
-                for data in data_info[split][condition]:
-                    # randomly mask prompt for training data
-                    if split == 'train':                    
-                        p = np.random.random()
-                        if p < self.config['p_prompt_mask']:
-                            prompt = ""
-                        else:
-                            prompt = data['prompt']
+                label = 1 if condition == 'tumor' else 0
+                data_batch = data_info[split][condition]
+                prompts = []
+                for data in data_batch:
+                    p = np.random.random()
+                    if split == 'train' and p < self.config['p_prompt_mask']:
+                        prompts.append("")
                     else:
-                        prompt = data['prompt']
-                    
-                    token = tokenizer(prompt).input_ids
+                        prompts.append(data['prompt'])
+                # batch tokenize
+                input_ids = tokenizer(
+                    prompts,
+                    return_tensors='pt',
+                    padding='max_length',
+                    truncation=True,
+                    max_length=tokenizer.model_max_length
+                ).input_ids  # shape: (batch, seq_len)
+
+                for data, token in zip(data_batch, input_ids):
                     data['token'] = token
+                    data['label'] = label
 
         return data_info
 
@@ -151,23 +160,62 @@ class BraTSProcessor(object):
 def create_transforms(image_size=512):
     
     image_transforms = transforms.Compose([
-        transforms.Resize(image_size, interpolation=transforms.InterpolationMode.BICUBIC),
         transforms.ToTensor(),
-        transforms.Normalize([0.5], [0.5]),
+        transforms.Resize((image_size, image_size), interpolation=transforms.InterpolationMode.BICUBIC),
+        transforms.Lambda(lambda x: x if x.shape[0] == 3 else x.repeat(3, 1, 1)),
+        transforms.Normalize([0.5] * 3, [0.5] * 3)
     ])
 
     conditioning_transforms = transforms.Compose([
-        transforms.Resize(image_size, interpolation=transforms.InterpolationMode.BICUBIC),
         transforms.ToTensor(),
+        transforms.Resize(image_size, interpolation=transforms.InterpolationMode.BICUBIC),
     ])
     
     return image_transforms, conditioning_transforms
 
 
+def custom_collate_fn(batch):
+    return {
+        'image': torch.stack([item['image'] for item in batch]),
+        'edge': torch.stack([item['edge'] for item in batch]),
+        'token': torch.stack([item['token'] for item in batch]),  # shape: (B, L)
+        'label': torch.tensor([item['label'] for item in batch]),
+    }
+
+
+class BraTSDataset(Dataset):
+    def __init__(self,
+                 data_info: dict,
+                 image_transforms: transforms.Compose,
+                 conditioning_transforms: transforms.Compose
+        ):
+        self.data_info = data_info
+        self.image_transforms = image_transforms
+        self.conditioning_transforms = conditioning_transforms
+
+    def __getitem__(self, idx):
+        
+        data = self.data_info[idx]
+
+        with open(data['image'], 'rb') as f:
+            image = pickle.load(f)
+        with open(data['edge'], 'rb') as f:
+            edge = pickle.load(f)
+
+        image = self.image_transforms(image)
+        edge = self.conditioning_transforms(edge)
+        token = data['token']
+        label = data['label']
+        return dict(image=image, edge=edge, token=token, label=label)
+    
+    def __len__(self):
+        return len(self.data_info)
+
+
 if __name__ == '__main__':
     
-    import json
-
+    from torch.utils.data import DataLoader
+    
     # 0. set environment
     config = {'server': 'psc',
               'p_prompt_mask': 0.5,
@@ -183,4 +231,24 @@ if __name__ == '__main__':
     processor = BraTSProcessor(config=config, tokenizer=tokenizer)
     data_info = processor.process()
 
-    print(data_info['train']['tumor'][0])
+    train_data_info = data_info['train']['tumor'] + data_info['train']['healthy']
+    import pickle
+    with open(train_data_info[0]['image'], 'rb') as f:
+        image = pickle.load(f)
+    with open(train_data_info[0]['edge'], 'rb') as f:
+        edge = pickle.load(f)
+    print("image.shape", image.shape)
+    print("edge.shape", edge.shape)
+
+    # 2. create dataset
+    image_transforms, conditioning_transforms = create_transforms(image_size=512)
+    train_set = BraTSDataset(train_data_info, image_transforms, conditioning_transforms)
+
+    # 3. create dataloader
+    train_loader = DataLoader(train_set, batch_size=4, shuffle=True, collate_fn=custom_collate_fn)
+    for batch in train_loader:
+        print("batch['image'].shape", batch['image'].shape)
+        print("batch['edge'].shape", batch['edge'].shape)
+        print("batch['token']", batch['token'])
+        print("batch['label']", batch['label'])
+        break

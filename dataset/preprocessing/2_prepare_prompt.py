@@ -4,9 +4,6 @@ import json
 import tqdm
 from utils.util import set_env
 
-config = {
-    'server': 'psc',
-}
 
 # function
 def classify_tumor_size(pixels: int) -> str:
@@ -39,7 +36,7 @@ def generate_prompt(modality: str, age: int | None, tumor_pixels: int, force_hea
 
 
 # set config
-config = set_env(config)
+config = set_env(config={'server': 'psc'})
 
 # save metadata
 meta_dir = os.path.join(config['data_root'], 'meta')

@@ -7,12 +7,15 @@ import nibabel as nib
 import numpy as np
 import pandas as pd
 from monai.transforms import SpatialPad
+from utils.util import set_env
+
 
 # set directory
-brats_dir = 'D:/data/BraTS/MICCAI_BraTS2020_TrainingData/MICCAI_BraTS2020_TrainingData'
-out_dir   = 'D:/data/tumor-controller'
-tumor_out_dir  = os.path.join(out_dir, "tumor")
-normal_out_dir = os.path.join(out_dir, "healthy")
+config = set_env(config={'server': 'psc'})
+brats_dir = os.path.join(os.path.dirname(config['data_root']), 'BraTS/MICCAI_BraTS2020_TrainingData/MICCAI_BraTS2020_TrainingData')
+tumor_out_dir = os.path.join(config['data_root'], "tumor")
+normal_out_dir = os.path.join(config['data_root'], "healthy")
+
 os.makedirs(tumor_out_dir,  exist_ok=True)
 os.makedirs(normal_out_dir, exist_ok=True)
 
@@ -28,14 +31,14 @@ param = {
         "percentile": 99.5
     }
 }
-with open(os.path.join(out_dir, "preprocessing_config.json"), "w") as f:
+with open(os.path.join(config['data_root'], "preprocessing_config.json"), "w") as f:
     json.dump(param, f, indent=4)
 
-slice_range  = param["slice_range"]
-tumor_lower  = param["tumor_lower"]
-tumor_upper  = param["tumor_upper"]
-low_thresh   = param["canny_thresholds"]["low"]
-high_thresh  = param["canny_thresholds"]["high"]
+slice_range = param["slice_range"]
+tumor_lower = param["tumor_lower"]
+tumor_upper = param["tumor_upper"]
+low_thresh = param["canny_thresholds"]["low"]
+high_thresh = param["canny_thresholds"]["high"]
 spatial_size = tuple(param["spatial_size"])
 
 padding_function = SpatialPad(
@@ -78,13 +81,13 @@ for patient_dir in tqdm.tqdm(patient_dirs, desc="Patients"):
     patient_id = os.path.basename(patient_dir).split('_')[-1]
 
     t1ce_path = next(f for f in os.listdir(patient_dir) if '_t1ce.nii' in f)
-    t2_path   = next(f for f in os.listdir(patient_dir) if '_t2.nii'   in f)
-    seg_path  = next(f for f in os.listdir(patient_dir) if '_seg.nii'  in f)
+    t2_path = next(f for f in os.listdir(patient_dir) if '_t2.nii' in f)
+    seg_path = next(f for f in os.listdir(patient_dir) if '_seg.nii' in f)
 
     t1ce_raw = nib.load(os.path.join(patient_dir, t1ce_path)).get_fdata().transpose(2,0,1)
-    t2_raw   = nib.load(os.path.join(patient_dir, t2_path)).get_fdata().transpose(2,0,1)
-    seg      = nib.load(os.path.join(patient_dir, seg_path)).get_fdata().transpose(2,0,1)
-
+    t2_raw = nib.load(os.path.join(patient_dir, t2_path)).get_fdata().transpose(2,0,1)
+    seg = nib.load(os.path.join(patient_dir, seg_path)).get_fdata().transpose(2,0,1)
+    
     # Apply padding first
     t1ce_padded = padding_function(t1ce_raw[np.newaxis]).numpy()[0]  # (155, 256, 256)
     t2_padded = padding_function(t2_raw[np.newaxis]).numpy()[0]      # (155, 256, 256)
@@ -92,28 +95,27 @@ for patient_dir in tqdm.tqdm(patient_dirs, desc="Patients"):
     
     # Normalize padded volumes
     t1ce_01, t1_min, t1_max = normalize_volume_01(t1ce_padded)
-    t2_01,  t2_min, t2_max  = normalize_volume_01(t2_padded)
+    t2_01, t2_min, t2_max = normalize_volume_01(t2_padded)
 
     stat_records += [
         {"patient_id": patient_id, "modality": "t1ce", "min": t1_min, "max": t1_max},
-        {"patient_id": patient_id, "modality": "t2",   "min": t2_min, "max": t2_max},
+        {"patient_id": patient_id, "modality": "t2", "min": t2_min, "max": t2_max},
     ]
 
     # ---- (b) for each slice ------------------------
     for z in slice_range:
-        t1ce_slice = t1ce_01[z][np.newaxis]  # (1, 256, 256)
-        t2_slice = t2_01[z][np.newaxis]      # (1, 256, 256)
-        seg_slice = seg_padded[z]            # (256, 256)
+        # (256, 256)
+        t1ce_slice = t1ce_01[z]
+        t2_slice = t2_01[z]
+        seg_slice = seg_padded[z]
         
         tumor_mask = np.isin(seg_slice, [1, 2, 4]).astype(np.uint8)
         tumor_pixels = tumor_mask.sum()
 
         # Edge map: generate from normalized padded slices
         canny_t1ce = generate_canny(t1ce_01[z])
-        canny_t2   = generate_canny(t2_01[z])
-        canny_t1ce = canny_t1ce[np.newaxis]  # (1, 256, 256)
-        canny_t2   = canny_t2[np.newaxis]    # (1, 256, 256)
-
+        canny_t2 = generate_canny(t2_01[z])
+        
         # set saving directory
         if tumor_pixels == 0:
             prefix = os.path.join(normal_out_dir, f"{patient_id}")
@@ -147,10 +149,10 @@ for patient_dir in tqdm.tqdm(patient_dirs, desc="Patients"):
 # 4. Save Stats CSV
 # --------------------------------------------------
 pd.DataFrame(stat_records).to_csv(
-    os.path.join(out_dir, "normalization_minmax_stats.csv"), index=False
+    os.path.join(config['data_root'], "normalization_minmax_stats.csv"), index=False
 )
 
 # Save tumor slice statistics
 pd.DataFrame(tumor_slice_records).to_csv(
-    os.path.join(out_dir, "tumor_slice_stats.csv"), index=False
+    os.path.join(config['data_root'], "tumor_slice_stats.csv"), index=False
 )
