@@ -24,16 +24,23 @@ class BraTSProcessor(object):
         self.config = config
         self.tokenizer = tokenizer
 
-        assert self.config['modality'] in ['t1ce', 't2', 't1ce+t2']
-        assert 0 <= self.config['fold_index'] < self.config['n_splits'], \
+        assert self.config['modality'] in ['t1ce', 't2', 't1ce+t2'], \
+            "modality must be one of ['t1ce', 't2', 't1ce+t2']"
+        assert self.config['proportion_empty_prompts'] >= 0 and self.config['proportion_empty_prompts'] <= 1, \
+            "proportion_empty_prompts must be between 0 and 1"
+        assert self.config['n_splits'] > 1, \
+            "n_splits must be greater than 1"
+        assert self.config['fold_index'] >= 0 and self.config['fold_index'] < self.config['n_splits'], \
             f"fold_index must be between 0 and {self.config['n_splits'] - 1}"
+        assert self.config['resolution'] % 8 == 0, \
+            f"resolution must be divisible by 8, but got {self.config['resolution']}"
         
         modality = self.config['modality']
         self.modality = modality.split('+') if '+' in modality else [modality]
 
         self.tumor_dir = os.path.join(config['data_root'], 'meta', 'tumor')
         self.healthy_dir = os.path.join(config['data_root'], 'meta', 'healthy')        
-        self.random_state = self.config['random_state']
+        self.seed = self.config['seed']
         self.n_splits = self.config['n_splits']
         self.fold_index = self.config['fold_index']
     
@@ -64,7 +71,7 @@ class BraTSProcessor(object):
         Returns:
             Dictionary containing train and test splits for both tumor and healthy cases
         """
-        kfold = StratifiedGroupKFold(n_splits=self.n_splits, shuffle=True, random_state=self.random_state)
+        kfold = StratifiedGroupKFold(n_splits=self.n_splits, shuffle=True, random_state=self.seed)
         
         # Get the specified fold
         for i, (train_idx, test_idx) in enumerate(kfold.split(all_files, labels, groups)):
@@ -128,7 +135,7 @@ class BraTSProcessor(object):
     
     def tokenize_prompts(self, data_info: dict, tokenizer: List[AutoTokenizer]):
         """Tokenize prompts and add labels to data_info."""
-        np.random.seed(self.random_state)
+        np.random.seed(self.seed)
 
         for split in ['train', 'test']:
             for condition in ['tumor', 'healthy']:
@@ -137,7 +144,7 @@ class BraTSProcessor(object):
                 prompts = []
                 for data in data_batch:
                     p = np.random.random()
-                    if split == 'train' and p < self.config['p_prompt_mask']:
+                    if split == 'train' and p < self.config['proportion_empty_prompts']:
                         prompts.append("")
                     else:
                         prompts.append(data['prompt'])
@@ -157,18 +164,18 @@ class BraTSProcessor(object):
         return data_info
 
 
-def create_transforms(image_size=512):
+def create_transforms(resolution=512):
     
     image_transforms = transforms.Compose([
         transforms.ToTensor(),
-        transforms.Resize((image_size, image_size), interpolation=transforms.InterpolationMode.BICUBIC),
+        transforms.Resize((resolution, resolution), interpolation=transforms.InterpolationMode.BICUBIC),
         transforms.Lambda(lambda x: x if x.shape[0] == 3 else x.repeat(3, 1, 1)),
         transforms.Normalize([0.5] * 3, [0.5] * 3)
     ])
 
     conditioning_transforms = transforms.Compose([
         transforms.ToTensor(),
-        transforms.Resize(image_size, interpolation=transforms.InterpolationMode.BICUBIC),
+        transforms.Resize(resolution, interpolation=transforms.InterpolationMode.BICUBIC),
     ])
     
     return image_transforms, conditioning_transforms
@@ -218,11 +225,11 @@ if __name__ == '__main__':
     
     # 0. set environment
     config = {'server': 'psc',
-              'p_prompt_mask': 0.5,
+              'proportion_empty_prompts': 0.5,
               'modality': 't1ce',
               'n_splits': 10,
               'fold_index': 0,
-              'random_state': 2025}
+              'seed': 2025}
     config = set_env(config)
 
     # 1. prepare dataset
@@ -241,7 +248,7 @@ if __name__ == '__main__':
     print("edge.shape", edge.shape)
 
     # 2. create dataset
-    image_transforms, conditioning_transforms = create_transforms(image_size=512)
+    image_transforms, conditioning_transforms = create_transforms(resolution=512)
     train_set = BraTSDataset(train_data_info, image_transforms, conditioning_transforms)
 
     # 3. create dataloader
