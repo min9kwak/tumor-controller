@@ -8,9 +8,9 @@ import datetime
 from config.base import ConfigBase, str2bool, str2tuple, handle_none
 
 
-class ConfigLDM(ConfigBase):
+class ConfigControlNet(ConfigBase):
     def __init__(self, args: argparse.Namespace = None, **kwargs):
-        super(ConfigLDM, self).__init__(args, **kwargs)
+        super(ConfigControlNet, self).__init__(args, **kwargs)
 
     @staticmethod
     def ddp_parser() -> argparse.ArgumentParser:
@@ -25,15 +25,15 @@ class ConfigLDM(ConfigBase):
     def data_parser() -> argparse.ArgumentParser:
         parser = ConfigBase.data_parser()
 
-        # additional arguments
-        # parser.add_argument('--argument', type=type, default=default, help='')
-
         return parser
 
     @staticmethod
     def train_parser() -> argparse.ArgumentParser:
         parser = ConfigBase.train_parser()
 
+        parser.add_argument('--proportion_empty_prompts', type=float, default=0,
+                            help="Proportion of image prompts to be replaced with empty strings. Defaults to 0 (no prompt replacement).")        
+        
         return parser
 
     @staticmethod
