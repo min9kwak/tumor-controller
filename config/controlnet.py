@@ -31,9 +31,9 @@ class ConfigControlNet(ConfigBase):
     def train_parser() -> argparse.ArgumentParser:
         parser = ConfigBase.train_parser()
 
-        parser.add_argument('--proportion_empty_prompts', type=float, default=0,
-                            help="Proportion of image prompts to be replaced with empty strings. Defaults to 0 (no prompt replacement).")        
-        
+        # additional arguments
+        # parser.add_argument('--argument', type=type, default=default, help='')
+
         return parser
 
     @staticmethod

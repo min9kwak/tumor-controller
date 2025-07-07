@@ -6,10 +6,11 @@ import tqdm
 import torch
 
 from collections import defaultdict
-from typing import List
 
 from torch.utils.data import Dataset
-from torchvision import transforms
+from monai.transforms import (
+    Compose, EnsureChannelFirst, Resize, CastToType, RepeatChannel, Lambda
+)
 from transformers import AutoTokenizer
 from sklearn.model_selection import StratifiedGroupKFold
 
@@ -142,7 +143,7 @@ class BraTSProcessor(object):
         self.print_summary(data_info)
         return data_info
     
-    def tokenize_prompts(self, data_info: dict, tokenizer: List[AutoTokenizer]):
+    def tokenize_prompts(self, data_info: dict, tokenizer: AutoTokenizer):
         """Tokenize prompts and add labels to data_info."""
         np.random.seed(self.seed)
 
@@ -166,45 +167,56 @@ class BraTSProcessor(object):
                     max_length=tokenizer.model_max_length
                 ).input_ids  # shape: (batch, seq_len)
 
-                for data, token in zip(data_batch, input_ids):
-                    data['token'] = token
+                for data, input_id, prompt in zip(data_batch, input_ids, prompts):
+                    data['input_id'] = input_id
                     data['label'] = label
+                    data['prompt'] = prompt
 
         return data_info
 
 
-def create_transforms(resolution=512):
+def create_transforms(resolution: int = 512, train: bool = True):
     assert resolution % 8 == 0, f"resolution must be divisible by 8, but got {resolution}"
         
-    image_transforms = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Resize((resolution, resolution), interpolation=transforms.InterpolationMode.BICUBIC),
-        transforms.Lambda(lambda x: x if x.shape[0] == 3 else x.repeat(3, 1, 1)),
-        transforms.Normalize([0.5] * 3, [0.5] * 3)
-    ])
-
-    conditioning_transforms = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Resize(resolution, interpolation=transforms.InterpolationMode.BICUBIC),
-    ])
+    image_transform_list = [
+        EnsureChannelFirst(channel_dim="no_channel"),
+        CastToType(dtype=torch.float32),
+        Resize((resolution, resolution), mode="bilinear"),
+        Lambda(lambda x: x.clamp_(0.0, 1.0)),
+        RepeatChannel(repeats=3),
+    ]
+    if train:
+        image_transform_list.append(Lambda(lambda x: x * 2.0 - 1.0))
     
+    conditioning_transform_list = [
+        EnsureChannelFirst(channel_dim="no_channel"),
+        CastToType(dtype=torch.float32),
+        Resize((resolution, resolution), mode="nearest"),
+        Lambda(lambda x: (x > 0.5).float()),
+    ]
+
+    image_transforms = Compose(image_transform_list)
+    conditioning_transforms = Compose(conditioning_transform_list)
+
     return image_transforms, conditioning_transforms
 
 
-def collate_fn(batch):
+def brats_collate_fn(batch):
     return {
+        'idx': [item['idx'] for item in batch],
         'image': torch.stack([item['image'] for item in batch]),
         'edge': torch.stack([item['edge'] for item in batch]),
-        'token': torch.stack([item['token'] for item in batch]),  # shape: (B, L)
+        'input_id': torch.stack([item['input_id'] for item in batch]),  # shape: (B, L)
         'label': torch.tensor([item['label'] for item in batch]),
+        'prompt': [item['prompt'] for item in batch],
     }
 
 
 class BraTSDataset(Dataset):
     def __init__(self,
                  data_info: dict,
-                 image_transforms: transforms.Compose,
-                 conditioning_transforms: transforms.Compose
+                 image_transforms: Compose,
+                 conditioning_transforms: Compose
         ):
         self.data_info = data_info
         self.image_transforms = image_transforms
@@ -221,9 +233,10 @@ class BraTSDataset(Dataset):
 
         image = self.image_transforms(image)
         edge = self.conditioning_transforms(edge)
-        token = data['token']
+        input_id = data['input_id']
+        prompt = data['prompt']
         label = data['label']
-        return dict(image=image, edge=edge, token=token, label=label)
+        return dict(image=image, edge=edge, input_id=input_id, label=label, prompt=prompt, idx=idx)
     
     def __len__(self):
         return len(self.data_info)
@@ -264,14 +277,24 @@ if __name__ == '__main__':
     print("edge.shape", edge.shape)
 
     # 2. create dataset
-    image_transforms, conditioning_transforms = create_transforms(resolution=512)
+    image_transforms, conditioning_transforms = create_transforms(resolution=512, train=True)
     train_set = BraTSDataset(train_data_info, image_transforms, conditioning_transforms)
 
     # 3. create dataloader
-    train_loader = DataLoader(train_set, batch_size=4, shuffle=True, collate_fn=collate_fn)
+    train_loader = DataLoader(train_set, batch_size=4, shuffle=True, collate_fn=brats_collate_fn)
     for batch in train_loader:
+        print("batch['idx']", batch['idx'])
         print("batch['image'].shape", batch['image'].shape)
         print("batch['edge'].shape", batch['edge'].shape)
-        print("batch['token']", batch['token'])
+        print("batch['input_id']", batch['input_id'])
         print("batch['label']", batch['label'])
+        print("batch['prompt']", batch['prompt'])
         break
+    
+    image_transforms, conditioning_transforms = create_transforms(resolution=512, train=False)
+    test_set = BraTSDataset(data_info['test']['tumor'], image_transforms, conditioning_transforms)
+    num_validation_samples = 2
+    np.random.seed(config['seed'])
+    test_idx = np.random.choice(test_set.__len__(), size=num_validation_samples, replace=False)
+    print(test_idx)
+    

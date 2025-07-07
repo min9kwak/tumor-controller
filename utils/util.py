@@ -1,5 +1,6 @@
 import argparse
-from typing import Union
+from typing import Union, List
+
 
 def set_env(config: Union[dict, argparse.Namespace], server: str = None) -> Union[dict, argparse.Namespace]:
     # set get and set for dict and argparse.Namespace
