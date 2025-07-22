@@ -52,7 +52,7 @@ class ConfigBase(object):
         self._task = None
 
     @classmethod
-    def parse_arguments(cls):
+    def parse_arguments(cls, args=None):
         """Create a configuration object from command line arguments."""
         parents = [
             cls.ddp_parser(),
@@ -67,7 +67,7 @@ class ConfigBase(object):
         parser.convert_arg_line_to_args = cls.convert_arg_line_to_args
 
         config = cls()
-        parser.parse_args(namespace=config)  # sets parsed arguments as attributes of namespace
+        parser.parse_args(args=args, namespace=config)  # sets parsed arguments as attributes of namespace
 
         return config
 
@@ -82,14 +82,14 @@ class ConfigBase(object):
     def save(self, path: str = None):
         """Save configurations to a .json file."""
         if path is None:
-            save_path = os.path.join(self.checkpoint_dir, 'configs.json')
+            save_path = os.path.join(self.output_dir, 'configs.json')
         else:
-            save_path = os.path.join(self.checkpoint_dir, f'configs_{path}.json')
+            save_path = os.path.join(self.output_dir, f'configs_{path}.json')
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
 
         attrs = copy.deepcopy(vars(self))
         attrs['task'] = self.task
-        attrs['checkpoint_dir'] = self.checkpoint_dir
+        attrs['output_dir'] = self.output_dir
 
         with open(save_path, 'w') as f:
             json.dump(attrs, f, indent=2)
@@ -190,7 +190,6 @@ class ConfigBase(object):
         parser.add_argument('--adam_weight_decay', type=float, default=1e-2, help="Weight decay to use.")
         parser.add_argument('--adam_epsilon', type=float, default=1e-08, help="Epsilon value for the Adam optimizer")
         parser.add_argument('--max_grad_norm', default=1.0, type=float, help="Max gradient norm.")
-        parser.add_argument('--push_to_hub', type=str2bool, default=False, help="Whether or not to push the model to the Hub.")
         parser.add_argument('--allow_tf32', type=str2bool, default=False,
                             help=("Whether or not to allow TF32 on Ampere GPUs. Can be used to speed up training. For more information,"
                                   " see https://pytorch.org/docs/stable/notes/cuda.html#tensorfloat-32-tf32-on-ampere-devices"))
@@ -206,12 +205,10 @@ class ConfigBase(object):
                             help=("Save more memory by using setting grads to None instead of zero. Be aware, that this changes certain"
                                   " behaviors, so disable this argument if it causes any problems. More info:"
                                   " https://pytorch.org/docs/stable/generated/torch.optim.Optimizer.zero_grad.html"))
-        parser.add_argument('--num_validation_images', type=int, default=4, help="Number of images to validate the model.")
         parser.add_argument('--validation_steps', type=int, default=100, help="Run validation every X steps.")
-        parser.add_argument('--validation_prompt', type=str, default=None, nargs="+",
-                            help=("A set of prompts evaluated every `--validation_steps` and logged to `--report_to`."
-                                  " Provide either a matching number of `--validation_image`s, a single `--validation_image`"
-                                  " to be used with all prompts, or a single prompt that will be used with all `--validation_image`s."))
+        parser.add_argument('--logging_steps', type=int, default=20, help="Log training loss and metrics every X steps.")
+        parser.add_argument('--num_validation_samples', type=int, default=4,
+                            help="Number of validation samples to use.")
         
         return parser
 
@@ -220,21 +217,19 @@ class ConfigBase(object):
         """Returns an `argparse.ArgumentParser` instance containing model-related arguments."""
         parser = argparse.ArgumentParser("Model Configuration", add_help=False)
 
+        parser.add_argument('--pretrained_model_name_or_path', type=str, default='runwayml/stable-diffusion-v1-5',
+                            help="Path to pretrained model or model identifier from huggingface.co/models.")        
         parser.add_argument('--revision', type=str, default=None,
                             help="Revision of pretrained model identifier from huggingface.co/models.")
         parser.add_argument('--variant', type=str, default=None,
                             help="Variant of the model files of the pretrained model identifier from huggingface.co/models, 'e.g.' fp16")
+        parser.add_argument('--cross_attention_dim', type=int, default=768,
+                            help="Cross-attention dimension for the UNet model.")
         parser.add_argument('--tokenizer_name', type=str, default=None,
                             help="Pretrained tokenizer name or path if not the same as model_name")
         parser.add_argument('--cache_dir', type=str, default="/ocean/projects/med230010p/mkwak/models",
                             help="Path to the directory where the downloaded models and datasets will be stored.")
         
-        parser.add_argument('--pretrained_model_name_or_path', type=str, default='runwayml/stable-diffusion-v1-5',
-                            help="Path to pretrained model or model identifier from huggingface.co/models.")
-        parser.add_argument('--controlnet_model_name_or_path', type=str, default='lllyasviel/sd-controlnet-canny',
-                            help="Path to pretrained controlnet model or model identifier from huggingface.co/models.")
-        
-
         return parser
 
     @staticmethod

@@ -1,10 +1,7 @@
 import argparse
-from torch.utils.checkpoint import is_compiled_module
 from typing import List
-from diffusers import (
-    AutoencoderKL, UNet2DConditionModel, DDPMScheduler,
-    CLIPTextModel, ControlNetModel
-)
+from diffusers import AutoencoderKL, UNet2DConditionModel, DDPMScheduler, ControlNetModel
+from transformers import CLIPTextModel
 
 
 def load_models(config: argparse.Namespace,
@@ -31,8 +28,10 @@ def load_models(config: argparse.Namespace,
             subfolder="unet",
             cache_dir=config.cache_dir,
             revision=config.revision,
-            variant=config.variant
+            variant=config.variant,
+            cross_attention_dim=config.cross_attention_dim
         )
+        unet.config.cross_attention_dim = config.cross_attention_dim
 
     if 'text_encoder' in model_names:
         text_encoder = CLIPTextModel.from_pretrained(
@@ -45,21 +44,16 @@ def load_models(config: argparse.Namespace,
 
     if 'controlnet' in model_names:
         controlnet = ControlNetModel.from_pretrained(
+            # TODO: use different pretrained model name
             config.pretrained_model_name_or_path,
             subfolder="controlnet",
             cache_dir=config.cache_dir
         )
     if 'noise_scheduler' in model_names:
-        scheduler = DDPMScheduler.from_pretrained(
+        noise_scheduler = DDPMScheduler.from_pretrained(
             config.pretrained_model_name_or_path,
             subfolder="scheduler",
             cache_dir=config.cache_dir
         )
     
-    return vae, unet, text_encoder, controlnet, scheduler
-
-
-def unwrap_model(model, accelerator):
-    model = accelerator.unwrap_model(model)
-    model = model._orig_mod if is_compiled_module(model) else model
-    return model
+    return vae, unet, text_encoder, controlnet, noise_scheduler

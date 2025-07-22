@@ -3,37 +3,10 @@ import pandas as pd
 import json
 import tqdm
 from utils.util import set_env
+from dataset.preprocessing.helper import PromptBuilder
 
 
-# function
-def classify_tumor_size(pixels: int) -> str:
-    if pixels <= 1400:
-        return "small tumor"
-    elif pixels <= 1700:
-        return "mild tumor"
-    elif pixels <= 2000:
-        return "medium-sized tumor"
-    elif pixels <= 2300:
-        return "moderate tumor"
-    else:
-        return "large tumor"
-
-def generate_prompt(modality: str, age: int | None, tumor_pixels: int, force_healthy: bool = False) -> str:
-    modality_str = {
-        "t1ce": "A contrast-enhanced T1-weighted brain MRI",
-        "t2": "A T2-weighted brain MRI"
-    }.get(modality.lower(), "A brain MRI")
-
-    age_desc = f"{age}-year-old" if age is not None else "unknown age"
-
-    if force_healthy or tumor_pixels == 0:
-        subject_desc = f"a {age_desc} healthy individual"
-    else:
-        size_desc = classify_tumor_size(tumor_pixels)
-        subject_desc = f"a {age_desc} patient with a {size_desc}"
-
-    return f"{modality_str} of {subject_desc}."
-
+prompter = PromptBuilder()
 
 # set config
 config = set_env(config={'server': 'psc'})
@@ -67,11 +40,14 @@ for tumor_file in tqdm.tqdm(tumor_files):
         age = None
     
     # generate prompt: modality, tumor size, age
-    prompt = generate_prompt(modality, age, int(tumor_size))
+    prompt = prompter.generate_prompt(modality, age, int(tumor_size))
     
     # other meta files
     edge_file = tumor_file.replace('-brain-', '-edge-')
     assert os.path.exists(edge_file)
+
+    seg_file = tumor_file.replace(f'-brain-{modality}-', '-seg-')
+    assert os.path.exists(seg_file)
     
     meta = {
         'patient_id': str(patient_id),
@@ -81,6 +57,7 @@ for tumor_file in tqdm.tqdm(tumor_files):
         'age': str(age) if age is not None else "unknown",
         'image': str(tumor_file),
         'edge': str(edge_file),
+        'seg': str(seg_file),
         'prompt': str(prompt)
     }
 
@@ -103,11 +80,14 @@ for healthy_file in tqdm.tqdm(healthy_files):
     except (IndexError, ValueError):
         age = None
 
-    prompt = generate_prompt(modality, age, 0)
+    prompt = prompter.generate_prompt(modality, age, 0)
 
     # other meta files
     edge_file = healthy_file.replace('-brain-', '-edge-')
     assert os.path.exists(edge_file)
+
+    seg_file = healthy_file.replace(f'-brain-{modality}-', '-seg-')
+    assert os.path.exists(seg_file)
 
     meta = {
         'patient_id': str(patient_id),
@@ -116,6 +96,7 @@ for healthy_file in tqdm.tqdm(healthy_files):
         'age': str(age) if age is not None else "unknown",
         'image': str(healthy_file),
         'edge': str(edge_file),
+        'seg': str(seg_file),
         'prompt': str(prompt)
     }
 

@@ -40,9 +40,9 @@ class ConfigControlNet(ConfigBase):
     def model_parser() -> argparse.ArgumentParser:
         parser = ConfigBase.model_parser()
 
-        # additional arguments
-        # parser.add_argument('--argument', type=type, default=default, help='')
-
+        parser.add_argument('--controlnet_model_name_or_path', type=str, default='lllyasviel/sd-controlnet-canny',
+                            help="Path to pretrained controlnet model or model identifier from huggingface.co/models.")
+        
         return parser
 
     @staticmethod

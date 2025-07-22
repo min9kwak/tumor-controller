@@ -45,18 +45,17 @@ class BraTSProcessor(object):
     
     def load_data(self):
         """Load data files and perform basic labeling."""
-        tumor_files = [f for f in os.listdir(self.tumor_dir) if 't1ce' in f]
-        healthy_files = [f for f in os.listdir(self.healthy_dir) if 't1ce' in f]
         
-        # Convert to full paths
+        tumor_files = [f for f in os.listdir(self.tumor_dir) if any(m in f for m in self.modality)]
+        healthy_files = [f for f in os.listdir(self.healthy_dir) if any(m in f for m in self.modality)]
+        
         tumor_files = [os.path.join(self.tumor_dir, f) for f in tumor_files]
         healthy_files = [os.path.join(self.healthy_dir, f) for f in healthy_files]
-        
+
         all_files = tumor_files + healthy_files
         labels = [1] * len(tumor_files) + [0] * len(healthy_files)
-        # Extract patient IDs from full paths
         groups = [os.path.basename(f).split('-')[0] for f in all_files]
-        
+
         return all_files, labels, groups
     
     def split_data(self, all_files, labels, groups):
@@ -193,6 +192,7 @@ def create_transforms(resolution: int = 512, train: bool = True):
         CastToType(dtype=torch.float32),
         Resize((resolution, resolution), mode="nearest"),
         Lambda(lambda x: (x > 0.5).float()),
+        RepeatChannel(repeats=3),
     ]
 
     image_transforms = Compose(image_transform_list)
@@ -202,41 +202,50 @@ def create_transforms(resolution: int = 512, train: bool = True):
 
 
 def brats_collate_fn(batch):
-    return {
-        'idx': [item['idx'] for item in batch],
-        'image': torch.stack([item['image'] for item in batch]),
-        'edge': torch.stack([item['edge'] for item in batch]),
-        'input_id': torch.stack([item['input_id'] for item in batch]),  # shape: (B, L)
-        'label': torch.tensor([item['label'] for item in batch]),
-        'prompt': [item['prompt'] for item in batch],
-    }
+    collated = {}
+    keys = batch[0].keys()
+
+    for key in keys:
+        if isinstance(batch[0][key], torch.Tensor):
+            collated[key] = torch.stack([item[key] for item in batch])
+        elif isinstance(batch[0][key], (int, float)):
+            collated[key] = torch.tensor([item[key] for item in batch])
+        else:
+            collated[key] = [item[key] for item in batch]
+
+    return collated
 
 
 class BraTSDataset(Dataset):
     def __init__(self,
                  data_info: dict,
                  image_transforms: Compose,
-                 conditioning_transforms: Compose
+                 conditioning_transforms: Compose,
+                 return_keys: list = None
         ):
         self.data_info = data_info
         self.image_transforms = image_transforms
         self.conditioning_transforms = conditioning_transforms
+        self.return_keys = return_keys or ['image', 'edge', 'seg', 'input_id', 'label', 'prompt', 'idx']
+
+        # define how to load each key (field)
+        self.loaders = {
+            'image': lambda d: self.image_transforms(pickle.load(open(d['image'], 'rb'))),
+            'edge': lambda d: self.conditioning_transforms(pickle.load(open(d['edge'], 'rb'))),
+            'seg': lambda d: self.conditioning_transforms(pickle.load(open(d['seg'], 'rb'))),
+            'input_id': lambda d: d['input_id'],
+            'label': lambda d: d['label'],
+            'prompt': lambda d: d['prompt'],
+            'idx': lambda d: d['idx'],
+        }
 
     def __getitem__(self, idx):
         
         data = self.data_info[idx]
-
-        with open(data['image'], 'rb') as f:
-            image = pickle.load(f)
-        with open(data['edge'], 'rb') as f:
-            edge = pickle.load(f)
-
-        image = self.image_transforms(image)
-        edge = self.conditioning_transforms(edge)
-        input_id = data['input_id']
-        prompt = data['prompt']
-        label = data['label']
-        return dict(image=image, edge=edge, input_id=input_id, label=label, prompt=prompt, idx=idx)
+        return {
+            k: self.loaders[k](data) if k != 'idx' else idx
+            for k in self.return_keys
+        }
     
     def __len__(self):
         return len(self.data_info)
@@ -250,17 +259,18 @@ if __name__ == '__main__':
     # 0. set environment
     config = {'server': 'psc',
               'proportion_empty_prompts': 0.5,
-              'modality': 't1ce',
+              'modality': 't1ce+t2',
               'n_splits': 10,
               'fold_index': 0,
               'seed': 2025,
-              'max_train_samples': 4000}
+              'max_train_samples': 1000}
     config = set_env(config)
 
     # 1. prepare dataset
     tokenizer = AutoTokenizer.from_pretrained('runwayml/stable-diffusion-v1-5',
                                               subfolder='tokenizer',
-                                              cache_dir=config['cache_dir'])
+                                              cache_dir=config['cache_dir'],
+                                              use_fast=False)
     processor = BraTSProcessor(config=config, tokenizer=tokenizer)
 
     accelerator = Accelerator()
@@ -268,13 +278,18 @@ if __name__ == '__main__':
         data_info = processor.process()
 
     train_data_info = data_info['train']['tumor'] + data_info['train']['healthy']
-    import pickle
+    for k, v in train_data_info[0].items():
+        print(f"{k}: {v}")
+
     with open(train_data_info[0]['image'], 'rb') as f:
         image = pickle.load(f)
     with open(train_data_info[0]['edge'], 'rb') as f:
         edge = pickle.load(f)
+    with open(train_data_info[0]['seg'], 'rb') as f:
+        seg = pickle.load(f)
     print("image.shape", image.shape)
     print("edge.shape", edge.shape)
+    print("seg.shape", seg.shape)
 
     # 2. create dataset
     image_transforms, conditioning_transforms = create_transforms(resolution=512, train=True)
@@ -286,11 +301,13 @@ if __name__ == '__main__':
         print("batch['idx']", batch['idx'])
         print("batch['image'].shape", batch['image'].shape)
         print("batch['edge'].shape", batch['edge'].shape)
+        print("batch['seg'].shape", batch['seg'].shape)
         print("batch['input_id']", batch['input_id'])
         print("batch['label']", batch['label'])
         print("batch['prompt']", batch['prompt'])
         break
     
+    # 4. create test / validation set
     image_transforms, conditioning_transforms = create_transforms(resolution=512, train=False)
     test_set = BraTSDataset(data_info['test']['tumor'], image_transforms, conditioning_transforms)
     num_validation_samples = 2

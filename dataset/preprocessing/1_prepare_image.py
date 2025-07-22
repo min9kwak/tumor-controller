@@ -141,9 +141,9 @@ for patient_dir in tqdm.tqdm(patient_dirs, desc="Patients"):
         with open(f"{prefix}-edge-t2-{z}.pkl", "wb") as f:
             pickle.dump(canny_t2, f)
 
-        if tumor_pixels > 0:
-            with open(f"{prefix}-seg-{z}.pkl", "wb") as f:
-                pickle.dump(tumor_mask[np.newaxis], f)
+        # note: save segmentation file of both tumor and healthy for consistency
+        with open(f"{prefix}-seg-{z}.pkl", "wb") as f:
+            pickle.dump(tumor_mask, f)
 
 # --------------------------------------------------
 # 4. Save Stats CSV

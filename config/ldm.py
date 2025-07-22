@@ -1,10 +1,6 @@
 # -*- coding: utf-8 -*-
 
-import os
-import copy
-import json
 import argparse
-import datetime
 from config.base import ConfigBase, str2bool, str2tuple, handle_none
 
 
@@ -56,9 +52,19 @@ class ConfigLDM(ConfigBase):
     
     @staticmethod
     def task_specific_parser() -> argparse.ArgumentParser:
+        
         parser = argparse.ArgumentParser("LDM", add_help=False)
-
-        # additional arguments
-        # parser.add_argument('--argument', type=type, default=default, help='')
-
+        
+        # LDM specific arguments
+        parser.add_argument('--offset_noise', type=str2bool, default=True,
+                            help="Whether to add offset noise during training.")
+        parser.add_argument('--strength', type=float, default=0.8,
+                            help="Strength for image-to-image translation.")
+        parser.add_argument('--guidance_scale', type=float, default=7.5,
+                            help="Guidance scale for inference.")
+        parser.add_argument('--num_inference_steps', type=int, default=20,
+                            help="Number of inference steps.")
+        parser.add_argument('--tumor_size', type=str, default="medium-sized",
+                            help="Tumor size for validation prompts.")
+        
         return parser

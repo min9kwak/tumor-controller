@@ -1,0 +1,72 @@
+# ControlNet Fine-tuning Configuration
+# Training parameters
+train_batch_size: 8
+learning_rate: 5e-4  # ControlNet은 보통 더 높은 learning rate 사용
+num_train_epochs: 10
+max_train_steps: null
+gradient_accumulation_steps: 2
+gradient_checkpointing: true
+
+# Model parameters
+pretrained_model_name_or_path: "stabilityai/stable-diffusion-2-1-base"
+controlnet_model_name_or_path: null  # null이면 새로 초기화
+modality: "t1"  # t1, t2, flair, t1ce
+resolution: 512
+mixed_precision: "fp16"
+
+# Dataset parameters
+dataset_name: "brats"
+dataset_root: "/path/to/brats/dataset"
+train_data_dir: null
+validation_data_dir: null
+cache_dir: null
+
+# Validation parameters
+validation_epochs: 1
+num_validation_images: 4
+validation_batch_size: 1
+validation_set: true
+num_validation_samples: 4
+validation_image: null  # Path to validation conditioning image
+validation_prompt: "A brain MRI scan"
+
+# Optimization parameters
+lr_scheduler: "constant"
+lr_warmup_steps: 500
+adam_beta1: 0.9
+adam_beta2: 0.999
+adam_weight_decay: 1e-2
+adam_epsilon: 1e-08
+max_grad_norm: 1.0
+
+# Controlnet specific parameters
+controlnet_conditioning_scale: 1.0
+proportion_empty_prompts: 0.0
+
+# Noise parameters
+offset_noise: false
+snr_gamma: null
+
+# Inference parameters
+strength: 0.8
+guidance_scale: 7.5
+num_inference_steps: 20
+tumor_size: "small"  # small, medium, large
+
+# Logging parameters
+logging_dir: "logs"
+output_dir: "outputs"
+checkpointing_steps: 1000
+checkpoints_total_limit: 3
+resume_from_checkpoint: null
+
+# Environment
+seed: 42
+dataloader_num_workers: 4
+local_rank: -1
+report_to: "tensorboard"
+
+# Advanced settings
+enable_xformers_memory_efficient_attention: false
+allow_tf32: false
+use_8bit_adam: false 
