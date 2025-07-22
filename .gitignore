@@ -138,6 +138,7 @@ plots/
 outputs/
 scratch/
 scripts/
+logs/
 
 # IDE
 .vscode
