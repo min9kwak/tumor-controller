@@ -14,15 +14,13 @@ from transformers import AutoTokenizer
 from sklearn.model_selection import StratifiedGroupKFold
 
 from utils.util import set_env
+from dataset.preprocessing.helper import PromptBuilder
 
 
 class BraTSProcessor(object):
-    def __init__(self,
-                 config: dict = None,
-                 tokenizer: AutoTokenizer = None):
+    def __init__(self, config: dict = None):
         
         self.config = config
-        self.tokenizer = tokenizer
 
         assert self.config['modality'] in ['t1ce', 't2', 't1ce+t2'], \
             "modality must be one of ['t1ce', 't2', 't1ce+t2']"
@@ -113,7 +111,6 @@ class BraTSProcessor(object):
             'test': {'tumor': tumor_test, 'healthy': healthy_test}
         }
         data_info = self.load_data_info(data_filenames)
-        data_info = self.tokenize_prompts(data_info, self.tokenizer)
         
         return data_info
     
@@ -140,109 +137,88 @@ class BraTSProcessor(object):
         data_info = self.split_data(all_files, labels, groups)
         self.print_summary(data_info)
         return data_info
-    
-    def tokenize_prompts(self, data_info: dict, tokenizer: AutoTokenizer):
-        """Tokenize prompts and add labels to data_info."""
-        np.random.seed(self.seed)
-
-        for split in ['train', 'test']:
-            for condition in ['tumor', 'healthy']:
-                label = 1 if condition == 'tumor' else 0
-                data_batch = data_info[split][condition]
-                prompts = []
-                for data in data_batch:
-                    p = np.random.random()
-                    if split == 'train' and p < self.config['proportion_empty_prompts']:
-                        prompts.append("")
-                    else:
-                        prompts.append(data['prompt'])
-                # batch tokenize
-                input_ids = tokenizer(
-                    prompts,
-                    return_tensors='pt',
-                    padding='max_length',
-                    truncation=True,
-                    max_length=tokenizer.model_max_length
-                ).input_ids  # shape: (batch, seq_len)
-
-                for data, input_id, prompt in zip(data_batch, input_ids, prompts):
-                    data['input_id'] = input_id
-                    data['label'] = label
-                    data['prompt'] = prompt
-
-        return data_info
 
 
 class BraTSDataset(Dataset):
     def __init__(self,
                  data_info: list,
-                 image_transform: mt.Compose,
-                 conditioning_transform: mt.Compose,
-                 dilate_transform: mt.Compose = None,
-                 blur_transform: mt.Compose = None,
-                 return_keys: list = None
-    ):
+                 prompt_builder: PromptBuilder,
+                 image_transform=None,
+                 conditioning_transform=None,
+                 dilate_transform=None,
+                 blur_transform=None,
+                 proportion_empty_prompts=0.0,
+                 return_keys=None):
+        
+        self.prompt_builder = prompt_builder
         self.image_transform = image_transform
         self.conditioning_transform = conditioning_transform
         self.dilate_transform = dilate_transform
         self.blur_transform = blur_transform
-        self.return_keys = return_keys or ['image', 'edge', 'dilate', 'blur', 'input_id', 'label', 'prompt', 'idx']
+        self.proportion_empty_prompts = proportion_empty_prompts
+        self.return_keys = return_keys or ['image', 'edge', 'dilate', 'blur', 'prompt', 'label', 'idx']
 
         self.tumor_seg_by_slice = self._index_tumor_segs_by_slice(data_info)
         self.data_info = self._filter_invalid_healthy_slices(data_info)
 
-        # set loaders
-        all_loaders = {
+        # Define loader functions per field
+        self.loaders = {
             'image': lambda d: self.image_transform(pickle.load(open(d['image'], 'rb'))),
             'edge': lambda d: self.conditioning_transform(pickle.load(open(d['edge'], 'rb'))),
             'dilate': lambda d: self.dilate_transform(self._load_seg(d)),
             'blur': lambda d: self.blur_transform(self._load_seg(d)),
-            'input_id': lambda d: d['input_id'],
-            'label': lambda d: d['label'],
-            'prompt': lambda d: d['prompt'],
-            'idx': lambda d: d['idx'],
+            'prompt': lambda d: self._build_prompt(d),
+            'label': lambda d: int(d['label']),  # <- int cast here
+            'idx': lambda d: d['idx'],           # will be injected in __getitem__
         }
-        # check invalid keys
-        invalid_keys = set(self.return_keys) - set(all_loaders.keys())
-        assert not invalid_keys, f"Invalid return_keys specified: {invalid_keys}"
 
-        # set valid loaders
-        self.loaders = {k: all_loaders[k] for k in self.return_keys}
+        invalid_keys = set(self.return_keys) - set(self.loaders.keys())
+        assert not invalid_keys, f"Invalid return_keys: {invalid_keys}"
+
+        self.loaders = {k: self.loaders[k] for k in self.return_keys}
 
     def _index_tumor_segs_by_slice(self, data_info):
-        slice_dict = {}
+        index = {}
         for d in data_info:
-            if d['label'] == 1:
-                slice_dict.setdefault(d['slice'], []).append(d['seg'])
-        return slice_dict
+            if int(d['label']) == 1:
+                slice_key = int(d['slice'])  # ← 변경
+                index.setdefault(slice_key, []).append(d['seg'])
+        return index
 
     def _filter_invalid_healthy_slices(self, data_info):
         filtered = []
-        removed_count = 0
+        removed = 0
         for d in data_info:
-            if d['label'] == 0 and d['slice'] not in self.tumor_seg_by_slice:
-                print(f"[BraTSDataset] Skipping healthy sample with unmatched slice: {d['slice']}")
-                removed_count += 1
+            if int(d['label']) == 0 and d['slice'] not in self.tumor_seg_by_slice:
+                removed += 1
                 continue
             filtered.append(d)
-        if removed_count > 0:
-            print(f"[BraTSDataset] Removed {removed_count} invalid healthy samples.")
+        if removed > 0:
+            print(f"[BraTSDataset] Removed {removed} invalid healthy samples.")
         return filtered
 
     def _load_seg(self, d):
-        if d['label'] == 1:
-            seg_path = d['seg']
+        if int(d['label']) == 1:
+            return pickle.load(open(d['seg'], 'rb'))
         else:
-            candidates = self.tumor_seg_by_slice[d['slice']]
+            slice_key = int(d['slice'])  # ← 변경
+            if slice_key not in self.tumor_seg_by_slice:
+                raise ValueError(f"No tumor seg found for healthy slice {slice_key}")
+            candidates = self.tumor_seg_by_slice[slice_key]
             seg_path = random.choice(candidates)
-        return pickle.load(open(seg_path, 'rb'))
+            return pickle.load(open(seg_path, 'rb'))
+
+    def _build_prompt(self, d):
+        age = None if d['age'] == "unknown" else int(d['age'])
+        tumor_size = int(d.get('tumor_size', 0))  # string → int, default=0 for healthy
+        if random.random() < self.proportion_empty_prompts:
+            return ""
+        return self.prompt_builder.generate_prompt(d['modality'], age, tumor_size)
 
     def __getitem__(self, idx):
-        data = self.data_info[idx]
-        return {
-            k: self.loaders[k](data) if k != 'idx' else idx
-            for k in self.return_keys
-        }
+        d = self.data_info[idx]
+        d['idx'] = idx  # inject index
+        return {k: self.loaders[k](d) for k in self.return_keys}
 
     def __len__(self):
         return len(self.data_info)
@@ -253,26 +229,26 @@ if __name__ == '__main__':
     from torch.utils.data import DataLoader
     from accelerate import Accelerator
     from dataset.transforms import create_transforms, brats_collate_fn, create_mask_transforms
+    from functools import partial
 
-    
     # 0. set environment
     config = {'server': 'psc',
-              'proportion_empty_prompts': 0.5,
-              'modality': 't1ce+t2',
-              'n_splits': 10,
-              'fold_index': 0,
-              'seed': 2025,
-              'max_train_samples': 1000}
+                'proportion_empty_prompts': 0.5,
+                'modality': 't1ce+t2',
+                'n_splits': 10,
+                'fold_index': 0,
+                'seed': 2025,
+                'max_train_samples': 1000}
     config = set_env(config)
 
     # 1. prepare dataset
     tokenizer = AutoTokenizer.from_pretrained('runwayml/stable-diffusion-v1-5',
-                                              subfolder='tokenizer',
-                                              cache_dir=config['cache_dir'],
-                                              use_fast=False)
-    processor = BraTSProcessor(config=config, tokenizer=tokenizer)
-
+                                            subfolder='tokenizer',
+                                            cache_dir=config['cache_dir'],
+                                            use_fast=True)
+    processor = BraTSProcessor(config=config)
     accelerator = Accelerator()
+
     with accelerator.main_process_first():
         data_info = processor.process()
 
@@ -291,55 +267,68 @@ if __name__ == '__main__':
     print("seg.shape", seg.shape)
 
     # 2. create dataset
+    from dataset.preprocessing.helper import PromptBuilder
+    from dataset.brats import BraTSDataset
+
+    prompter = PromptBuilder()
     image_transforms, conditioning_transforms = create_transforms(resolution=512, train=True)
     dilate_transform, blur_transform = create_mask_transforms(resolution=512, dilation_size=5, sigma=5.0)
 
-    train_set = BraTSDataset(train_data_info, image_transforms, conditioning_transforms, dilate_transform, blur_transform)
+    train_set = BraTSDataset(train_data_info,
+                            prompt_builder=prompter,
+                            image_transform=image_transforms,
+                            conditioning_transform=conditioning_transforms,
+                            dilate_transform=dilate_transform,
+                            blur_transform=blur_transform)
 
     # 3. create dataloader
-    train_loader = DataLoader(train_set, batch_size=4, shuffle=True, collate_fn=brats_collate_fn)
+    from dataset.transforms import brats_collate_fn
+    collate_fn = partial(brats_collate_fn, tokenizer=tokenizer)
+
+    train_loader = DataLoader(train_set, batch_size=4, shuffle=True, collate_fn=collate_fn)
+
     for batch in train_loader:
-        print("batch['idx']", batch['idx'])
-        print("batch['image'].shape", batch['image'].shape)
-        print("batch['edge'].shape", batch['edge'].shape)
-        print("batch['dilate'].shape", batch['dilate'].shape)
-        print("batch['blur'].shape", batch['blur'].shape)
-        print("batch['input_id']", batch['input_id'])
-        print("batch['label']", batch['label'])
-        print("batch['prompt']", batch['prompt'])
+        print("batch['idx']:", batch['idx'])
+        print("batch['image'].shape:", batch['image'].shape)
+        print("batch['edge'].shape:", batch['edge'].shape)
+        print("batch['dilate'].shape:", batch['dilate'].shape)
+        print("batch['blur'].shape:", batch['blur'].shape)
+        print("batch['input_ids'].shape:", batch['input_ids'].shape)
+        print("batch['label']:", batch['label'])
         break
-    
-    # 4. create test / validation set
+
+    # 4. test set for quick validation
     image_transforms, conditioning_transforms = create_transforms(resolution=512, train=False)
     dilate_transform, blur_transform = create_mask_transforms(resolution=512, dilation_size=5, sigma=5.0)
-    test_set = BraTSDataset(data_info['test']['tumor'], image_transforms, conditioning_transforms, dilate_transform, blur_transform)
-    num_validation_samples = 2
-    np.random.seed(config['seed'])
-    test_idx = np.random.choice(test_set.__len__(), size=num_validation_samples, replace=False)
-    print(test_idx)
 
-    # 5. Check dilate and blur outputs
+    test_set = BraTSDataset(data_info['test']['tumor'],
+                            prompt_builder=prompter,
+                            image_transform=image_transforms,
+                            conditioning_transform=conditioning_transforms,
+                            dilate_transform=dilate_transform,
+                            blur_transform=blur_transform)
+
+    np.random.seed(config['seed'])
+    test_idx = np.random.choice(len(test_set), size=2, replace=False)
+    print("Validation indices:", test_idx)
+
+    # 5. check dilate/blur output for a sample
     print("\n[Checking dilate and blur transformations]")
     sample = train_set[0]
+
+    import matplotlib.pyplot as plt
 
     if 'dilate' in sample and sample['dilate'] is not None:
         print("sample['dilate'].shape:", sample['dilate'].shape)
         print("sample['dilate'].min():", sample['dilate'].min(), "max():", sample['dilate'].max())
-
-    if 'blur' in sample and sample['blur'] is not None:
-        print("sample['blur'].shape:", sample['blur'].shape)
-        print("sample['blur'].min():", sample['blur'].min(), "max():", sample['blur'].max())
-
-    # Optional: visualize using matplotlib
-    import matplotlib.pyplot as plt
-
-    if 'dilate' in sample and sample['dilate'] is not None:
         plt.imshow(sample['dilate'].squeeze().cpu(), cmap='gray')
         plt.title('Dilated Mask')
         plt.axis('off')
         plt.show()
 
     if 'blur' in sample and sample['blur'] is not None:
+        print("sample['blur'].shape:", sample['blur'].shape)
+        print("sample['blur'].min():", sample['blur'].min(), "max():", sample['blur'].max())
         plt.imshow(sample['blur'].squeeze().cpu(), cmap='gray')
         plt.title('Blurred Mask')
         plt.axis('off')

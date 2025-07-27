@@ -3,10 +3,7 @@ import pandas as pd
 import json
 import tqdm
 from utils.util import set_env
-from dataset.preprocessing.helper import PromptBuilder
 
-
-prompter = PromptBuilder()
 
 # set config
 config = set_env(config={'server': 'psc'})
@@ -39,9 +36,6 @@ for tumor_file in tqdm.tqdm(tumor_files):
     except (IndexError, ValueError):
         age = None
     
-    # generate prompt: modality, tumor size, age
-    prompt = prompter.generate_prompt(modality, age, int(tumor_size))
-    
     # other meta files
     edge_file = tumor_file.replace('-brain-', '-edge-')
     assert os.path.exists(edge_file)
@@ -58,7 +52,7 @@ for tumor_file in tqdm.tqdm(tumor_files):
         'image': str(tumor_file),
         'edge': str(edge_file),
         'seg': str(seg_file),
-        'prompt': str(prompt)
+        'label': '1'
     }
 
     save_file = tumor_file.split('/')[-1].replace('.pkl', '.json').replace('-brain', '')
@@ -80,8 +74,6 @@ for healthy_file in tqdm.tqdm(healthy_files):
     except (IndexError, ValueError):
         age = None
 
-    prompt = prompter.generate_prompt(modality, age, 0)
-
     # other meta files
     edge_file = healthy_file.replace('-brain-', '-edge-')
     assert os.path.exists(edge_file)
@@ -97,7 +89,7 @@ for healthy_file in tqdm.tqdm(healthy_files):
         'image': str(healthy_file),
         'edge': str(edge_file),
         'seg': str(seg_file),
-        'prompt': str(prompt)
+        'label': '0'
     }
 
     save_file = healthy_file.split('/')[-1].replace('.pkl', '.json').replace('-brain', '')  
