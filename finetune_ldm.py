@@ -99,15 +99,28 @@ def main(args: ConfigLDM):
 
 
 if __name__ == "__main__":
+    
+    from utils.msg import send_telegram
+    
     # Parse arguments with YAML config support
     args = parse_arguments_with_yaml()
     args.task = 'finetune_ldm'
     args = set_env(args)
 
     np.random.seed(args.seed)
-    main(args)
-
-    # TODO: train unet only, not vae
-    # TODO: separate learning rate for vae and unet
-    # TODO: finetune with LoRA
-    # TODO: send telegram message when training starts and ends
+    
+    # send telegram message when training starts
+    try:
+        # send telegram message when training starts
+        send_telegram(dotenv_path='.env', message=f'Starting {args.task} - {args.experiment_id}.')
+        main(args)
+        # Completed successfully
+        send_telegram(dotenv_path='.env', message=f'✅ Successfully finished {args.task} - {args.experiment_id}.')
+    except KeyboardInterrupt:
+        # Interrupted by user
+        send_telegram(dotenv_path='.env', message=f'⚠️ Training interrupted by user - {args.task} - {args.experiment_id}.')
+        raise
+    except Exception as e:
+        # Other errors
+        send_telegram(dotenv_path='.env', message=f'❌ Training failed with error - {args.task} - {args.experiment_id}: {str(e)}')
+        raise

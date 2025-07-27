@@ -139,6 +139,7 @@ outputs/
 scratch/
 scripts/
 logs/
+notebook/
 
 # IDE
 .vscode

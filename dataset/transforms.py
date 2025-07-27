@@ -1,20 +1,47 @@
 import random
 import torch
-from monai.transforms import Compose, EnsureChannelFirst, ToTensor, Resize
-from monai.utils.enums import TransformBackends
+from monai.transforms import (
+    Compose, EnsureChannelFirst, Resize, CastToType, RepeatChannel, Lambda
+)
 
 
-def make_transforms(image_size: int = 512):
+def brats_collate_fn(batch):
+    collated = {}
+    keys = batch[0].keys()
+
+    for key in keys:
+        if isinstance(batch[0][key], torch.Tensor):
+            collated[key] = torch.stack([item[key] for item in batch])
+        elif isinstance(batch[0][key], (int, float)):
+            collated[key] = torch.tensor([item[key] for item in batch])
+        else:
+            collated[key] = [item[key] for item in batch]
+
+    return collated
+
+
+def create_transforms(resolution: int = 512, train: bool = True):
+    assert resolution % 8 == 0, f"resolution must be divisible by 8, but got {resolution}"
+        
+    image_transform_list = [
+        EnsureChannelFirst(channel_dim="no_channel"),
+        CastToType(dtype=torch.float32),
+        Resize((resolution, resolution), mode="bilinear"),
+        Lambda(lambda x: x.clamp_(0.0, 1.0)),
+        RepeatChannel(repeats=3),
+    ]
+    if train:
+        image_transform_list.append(Lambda(lambda x: x * 2.0 - 1.0))
     
-    image_transform = Compose([
-        EnsureChannelFirst(),
-        ToTensor(torch.float32),
-        Resize(spatial_size=(image_size, image_size), mode='bilinear')
-    ])
-    seg_transform = Compose([
-        EnsureChannelFirst(),
-        ToTensor(torch.long),
-        Resize(spatial_size=(image_size, image_size), mode='bilinear')
-    ])
+    conditioning_transform_list = [
+        EnsureChannelFirst(channel_dim="no_channel"),
+        CastToType(dtype=torch.float32),
+        Resize((resolution, resolution), mode="nearest"),
+        Lambda(lambda x: (x > 0.5).float()),
+        RepeatChannel(repeats=3),
+    ]
 
-    return image_transform, seg_transform
+    image_transforms = Compose(image_transform_list)
+    conditioning_transforms = Compose(conditioning_transform_list)
+
+    return image_transforms, conditioning_transforms

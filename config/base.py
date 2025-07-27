@@ -238,7 +238,7 @@ class ConfigBase(object):
         parser = argparse.ArgumentParser("Logging", add_help=False)
         
         # move to task-specific parser
-        parser.add_argument('--checkpointing_steps', type=int, default=500,
+        parser.add_argument('--checkpointing_steps', type=int, default=1000,
                             help="Save a checkpoint of the training state every X updates.")
         parser.add_argument('--checkpoints_total_limit', type=int, default=None,
                             help="Max number of checkpoints to store.")

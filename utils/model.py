@@ -5,7 +5,7 @@ from transformers import CLIPTextModel
 
 
 def load_models(config: argparse.Namespace,
-                model_names: List[str]):
+                model_names: List[str] = ["vae", "unet", "text_encoder", "controlnet", "noise_scheduler"]):
     """
     Selectively load models and noise scheduler from the checkpoint.
     """

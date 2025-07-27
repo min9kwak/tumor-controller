@@ -1,7 +1,7 @@
 # LDM Fine-tuning Configuration
 # Training parameters
-train_batch_size: 8
-learning_rate: 1e-4
+train_batch_size: 16
+learning_rate: 5e-6
 num_train_epochs: 30
 max_train_steps: null # 10
 gradient_accumulation_steps: 4
@@ -18,7 +18,7 @@ max_train_samples: null # 2000
 
 # Validation parameters
 validation_steps: 1000
-num_validation_samples: 4
+num_validation_samples: 8
 
 # Logging parameters
 logging_steps: 50
