@@ -181,7 +181,7 @@ def main(args):
 
     # Load the tokenizer
     tokenizer = AutoTokenizer.from_pretrained(args.pretrained_model_name_or_path, subfolder='tokenizer',
-                                              cache_dir=args.cache_dir, use_fast=False)
+                                              cache_dir=args.cache_dir, use_fast=True)
 
     # Load scheduler and models
     vae, unet, text_encoder, _, noise_scheduler = load_models(args, model_names=['vae', 'unet', 'text_encoder', 'noise_scheduler'])

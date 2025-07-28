@@ -28,17 +28,15 @@ from tqdm.auto import tqdm
 
 import diffusers
 from diffusers import AutoencoderKL, UNet2DConditionModel
-from diffusers import AutoPipelineForImage2Image
+from diffusers import StableDiffusionInpaintPipeline
 from diffusers.optimization import get_scheduler
 
 from dataset.brats import BraTSDataset, BraTSProcessor
-from dataset.transforms import create_transforms, brats_collate_fn
-from dataset.preprocessing.helper import PromptBuilder
+from dataset.transforms import create_transforms, create_mask_transforms, brats_collate_fn
 from utils.model import load_models
 
 
-
-class LDMFineTuner:
+class LDMInpaintFineTuner:
     def __init__(self,
                  args: argparse.Namespace,
                  model_names: List[str],
@@ -49,8 +47,7 @@ class LDMFineTuner:
         self.model_names = model_names
         self.trainable_model_names = trainable_model_names
         self.processor = processor
-        self.prompt_builder = PromptBuilder()
-
+        
         self._configure_root_logger()
         self._set_accelerator()
         self._set_logging_verbosity()
@@ -77,45 +74,48 @@ class LDMFineTuner:
         with self.accelerator.main_process_first():
             data_info = self.processor.process()
         
+        # set return_keys
+        return_keys = ['image', 'dilate', 'input_ids', 'label', 'prompt', 'idx']
+        
         # prepare train dataset
         train_data_info = data_info['train']['tumor'] + data_info['train']['healthy']
-        image_transforms, conditioning_transforms = create_transforms(resolution=self.args.resolution, train=True)
-        train_set = BraTSDataset(train_data_info, image_transforms, conditioning_transforms)
-        self.train_loader = DataLoader(
-            train_set, 
-            batch_size=self.args.train_batch_size, 
-            shuffle=True, 
-            collate_fn=brats_collate_fn,
-            num_workers=self.args.dataloader_num_workers if hasattr(self.args, 'dataloader_num_workers') else 0
-        )
+        image_transform, _ = create_transforms(resolution=self.args.resolution, train=True)
+        dilate_transform, _ = create_mask_transforms(resolution=self.args.resolution, dilation_size=self.args.dilation_size, sigma=self.args.sigma)
+        
+        train_set = BraTSDataset(data_info=train_data_info, image_transform=image_transform,
+                                 dilate_transform=dilate_transform, return_keys=return_keys)
+
+        self.train_loader = DataLoader(dataset=train_set, batch_size=self.args.train_batch_size, shuffle=True,  collate_fn=brats_collate_fn,
+                                       num_workers=self.args.dataloader_num_workers if hasattr(self.args, 'dataloader_num_workers') else 0)
         
         # TODO: prepare test dataset
-        # test_data_info = data_info['test']['tumor'] + data_info['test']['healthy']
-        # test_set = BraTSDataset(test_data_info, image_transforms, conditioning_transforms)
-        # self.test_loader = DataLoader(
-        #     test_set, 
-        #     batch_size=self.args.eval_batch_size if hasattr(self.args, 'eval_batch_size') else self.args.train_batch_size, 
-        #     shuffle=False, 
-        #     collate_fn=brats_collate_fn
-        # )
         
         # prepare validation dataset (select some samples from test dataset)
-        image_transforms_val, conditioning_transforms_val = create_transforms(resolution=self.args.resolution, train=False)
+        image_transform_val, _ = create_transforms(resolution=self.args.resolution, train=False)
             
-        # select validation samples from each class (tumor, healthy)
+        # create full test dataset first to avoid healthy samples being filtered out
+        test_info = data_info['test']['tumor'] + data_info['test']['healthy']
+        full_test_set = BraTSDataset(data_info=test_info, image_transform=image_transform_val,
+                                     dilate_transform=dilate_transform, return_keys=return_keys)
+        
+        # get indices for tumor and healthy samples from the full test set
+        tumor_indices = [i for i, d in enumerate(full_test_set.data_info) if int(d['label']) == 1]
+        healthy_indices = [i for i, d in enumerate(full_test_set.data_info) if int(d['label']) == 0]
+        
+        # select validation indices from each class
         np.random.seed(self.args.seed)
-        tumor_test = data_info['test']['tumor']
-        healthy_test = data_info['test']['healthy']
-        
         samples_per_class = self.args.num_validation_samples // 2
-        tumor_val_idx = np.random.choice(len(tumor_test), size=min(samples_per_class, len(tumor_test)), replace=False)
-        healthy_val_idx = np.random.choice(len(healthy_test), size=min(samples_per_class, len(healthy_test)), replace=False)
         
-        tumor_val = [tumor_test[i] for i in tumor_val_idx]
-        healthy_val = [healthy_test[i] for i in healthy_val_idx]
+        selected_tumor_idx = np.random.choice(len(tumor_indices),
+                                              size=min(samples_per_class, len(tumor_indices)),
+                                              replace=False)
+        selected_healthy_idx = np.random.choice(len(healthy_indices),
+                                                size=min(samples_per_class, len(healthy_indices)),
+                                                replace=False)
         
-        validation_data = tumor_val + healthy_val
-        self.validation_set = BraTSDataset(validation_data, image_transforms_val, conditioning_transforms_val)
+        # get actual dataset indices
+        self.validation_indices = ([tumor_indices[i] for i in selected_tumor_idx] + [healthy_indices[i] for i in selected_healthy_idx])
+        self.validation_set = full_test_set
 
     def train(self):
         
@@ -140,18 +140,8 @@ class LDMFineTuner:
         if self.accelerator.is_main_process:
             tracker_config = dict(vars(self.args))
             
-            # tensorboard cannot handle list types for config
-            # TODO: wandb can handle list types, correct?
-            # TODO: change this arguments later according to the config
-            # TODO: check the list type arguments
-            
-            # tracker_config.pop("validation_prompt")
-            # tracker_config.pop("validation_image")
-
             # Use task as project name and experiment_id as run name
             if self.args.report_to == "wandb":
-                import os
-                
                 # Set wandb run name via environment variable before accelerator init
                 os.environ["WANDB_RUN_NAME"] = self.args.experiment_id
                 
@@ -194,10 +184,10 @@ class LDMFineTuner:
         log_count = 0
         
         for epoch in range(first_epoch, self.args.num_train_epochs):
-            for step, batch in enumerate(self.train_loader):
+            for _, batch in enumerate(self.train_loader):
                 
                 # Train Step
-                loss = self.train_step(batch, global_step)
+                loss = self.train_step(batch)
                 
                 # Accumulate loss for logging (every step)
                 accumulated_loss = accumulated_loss + loss.detach().item()
@@ -242,12 +232,11 @@ class LDMFineTuner:
         self.accelerator.wait_for_everyone()
         if self.accelerator.is_main_process:
             # save trainable models
-            if 'vae' in self.trainable_model_names:
-                self.vae = self.accelerator.unwrap_model(self.vae)
-                self.vae.save_pretrained(os.path.join(self.args.output_dir, "vae"))
-            if 'unet' in self.trainable_model_names:
-                self.unet = self.accelerator.unwrap_model(self.unet)
-                self.unet.save_pretrained(os.path.join(self.args.output_dir, "unet"))
+            for name in self.trainable_model_names:
+                model = getattr(self, name)
+                model = self.accelerator.unwrap_model(model)
+                setattr(self, name, model)
+                model.save_pretrained(os.path.join(self.args.output_dir, name))
 
             # run a final round of validation
             if self.validation_set is not None:
@@ -256,56 +245,68 @@ class LDMFineTuner:
         # finish
         self.accelerator.end_training()
 
-    def train_step(self, batch, global_step):
+    def train_step(self, batch):
+        # TODO: self.unet -> select from trainable_model_names
         with self.accelerator.accumulate(self.unet):
+            
+            # create mask: [B, 1, H, W]; binary
+            mask = batch['dilate']
+            image = batch['image'].to(dtype=self.weight_dtype)
+
+            # apply mask to image: due to -1 ~ +1 normalization, -1 is black (masked)
+            image_masked = image.clone()
+            # Expand mask to match image channels: [B, 1, H, W] -> [B, C, H, W]
+            mask_expanded = mask.expand(-1, image.shape[1], -1, -1)
+            image_masked[mask_expanded == 0] = -1.0
+
             # image to latent
-            latent = self.vae.encode(batch["image"].to(dtype=self.weight_dtype)).latent_dist.sample()
-            latent = latent * self.vae.config.scaling_factor
+            latent_target = self.vae.encode(image).latent_dist.sample()
+            latent_target = latent_target * self.vae.config.scaling_factor
+
+            latent_masked = self.vae.encode(image_masked).latent_dist.sample()
+            latent_masked = latent_masked * self.vae.config.scaling_factor
 
             # sample and add noise to the latents
-            # TODO: add noise_offset (default True) to the config file
             if self.args.offset_noise:
-                noise = torch.randn_like(latent) + 0.1 * torch.randn(
-                    latent.shape[0], latent.shape[1], 1, 1, device=latent.device
+                noise = torch.randn_like(latent_masked) + 0.1 * torch.randn(
+                    latent_masked.shape[0], latent_masked.shape[1], 1, 1, device=latent_masked.device
                 )
             else:
-                noise = torch.randn_like(latent)
+                noise = torch.randn_like(latent_masked)
 
-            bsz, channels, height, width = latent.shape
+            bsz, channels, height, width = latent_masked.shape
 
             # sample a random timestep for each image
             timesteps = torch.randint(
-                0, self.noise_scheduler.config.num_train_timesteps, (bsz,), device=latent.device
+                0, self.noise_scheduler.config.num_train_timesteps, (bsz,), device=latent_masked.device
             )
             timesteps = timesteps.long()
 
-            noisy_latent = self.noise_scheduler.add_noise(
-                latent.float(), noise.float(), timesteps
-            )
+            noisy_latent = self.noise_scheduler.add_noise(latent_masked.float(), noise.float(), timesteps)
             noisy_latent = noisy_latent.to(dtype=self.weight_dtype)
 
-            # Get the text embedding for conditioning
-            input_id = self.text_encoder(batch["input_id"], return_dict=False)[0]
-
-            # optional step
             if self.accelerator.unwrap_model(self.unet).config.in_channels == channels * 2:
                 noisy_latent = torch.cat([noisy_latent, noisy_latent], dim=1)
 
-            pred = self.unet(
-                noisy_latent,
-                timesteps,
-                input_id,
-                return_dict=False,
-            )[0]
+            # Get the text embedding for conditioning
+            encoder_hidden_state = self.text_encoder(batch["input_ids"], return_dict=False)[0]
 
+            # Unet forward
+            pred = self.unet(noisy_latent, timesteps, encoder_hidden_state, return_dict=False)[0]
+
+            # ground truth noise
             if self.noise_scheduler.config.prediction_type == "epsilon":
                 target = noise
             elif self.noise_scheduler.config.prediction_type == "v_prediction":
-                target = self.noise_scheduler.get_velocity(latent, noise, timesteps)
+                target = self.noise_scheduler.get_velocity(latent_target, noise, timesteps)
             else:
                 raise ValueError(f"Unknown prediction type {self.noise_scheduler.config.prediction_type}")
+            
+            # resize mask to latent size
+            mask_latent = F.interpolate(mask.float(), size=target.shape[-2:], mode="nearest")
 
-            loss = F.mse_loss(pred.float(), target.float(), reduction="mean")
+            # loss: only over masked (inpaint) region
+            loss = F.mse_loss(pred * mask_latent, target * mask_latent, reduction="sum") / (mask_latent.sum() + 1e-8)
 
             self.accelerator.backward(loss)
             if self.accelerator.sync_gradients:
@@ -590,13 +591,12 @@ class LDMFineTuner:
         unet.eval()
         
         # Step 2: define pipeline
-        pipeline = AutoPipelineForImage2Image.from_pretrained(
+        pipeline = StableDiffusionInpaintPipeline.from_pretrained(
             self.args.pretrained_model_name_or_path,
             vae=vae,
             text_encoder=self.text_encoder,
             tokenizer=self.processor.tokenizer,
             unet=unet,
-            # controlnet=self.controlnet if hasattr(self, 'controlnet') else None,
             safety_checker=None,
             revision=self.args.revision,
             variant=self.args.variant,
@@ -631,52 +631,90 @@ class LDMFineTuner:
         # Step 4: inference
         for mode in ['original', 'reversed']:
             logs = []
-            for idx, data in enumerate(self.validation_set):
-                src = data['image']
-                prompt = data['prompt']
+            for cnt, val_idx in enumerate(self.validation_indices):
+                
+                data = self.validation_set[val_idx]
+                
+                src = data['image']         # 0 ~ 1, (3, 512, 512)
+                mask = data['dilate']       # 0 ~ 1, (1, 512, 512)
+                prompt = data['prompt']     # string
 
-                # TODO: include tumor size in the args
                 if mode == 'original':
                     prompt = prompt
                 else:
                     try:
-                        prompt = self.prompt_builder.reverse_prompt(prompt, tumor_size=self.args.tumor_size)
+                        prompt = self.processor.prompt_builder.reverse_prompt(prompt)
                     except Exception as e:
-                        self.logger.warning(f"Reverse prompt failed at idx={idx} due to: {e}")
+                        self.logger.warning(f"Reverse prompt failed at idx={cnt} due to: {e}")
                         continue
-                # TODO: include strength, ... in the args
+                
                 with inference_ctx:
                     out = pipeline(
                         prompt,
                         image=src,
-                        strength=self.args.strength,
-                        guidance_scale=self.args.guidance_scale,
+                        mask_image=mask * 255.0,
                         output_type='pt',
-                        # negative_prompt='3d render, illustration, doll, cartoon, colored, bokeh',
                         num_inference_steps=self.args.num_inference_steps,
+                        guidance_scale=self.args.guidance_scale,
                         generator=generator
                     ).images[0] # (3, 512, 512)
                 
-                # Convert to grayscale and move to CPU for plotting
-                src_gray = src.mean(0).cpu().numpy()  # (512, 512)
-                out_gray = out.mean(0).cpu().numpy()  # (512, 512)
+                # Convert grayscale
+                src_gray = src.mean(0).detach().cpu().numpy()        # [H, W]
+                out_gray = out.mean(0).detach().cpu().numpy()       # [H, W]
+                mask_np = mask.squeeze(0).detach().cpu().numpy()       # [H, W], binary 0 or 1
+
+                # Diff: abs(original - translated)
                 diff = np.abs(src_gray - out_gray)
 
-                fig, axs = plt.subplots(1, 3, figsize=(9, 3))
-                for ax, img, title in zip(axs, [src_gray, out_gray, diff], ["input", "translated", "abs-diff"]):
-                    ax.imshow(img, cmap='gray', vmin=0.0, vmax=1.0)
-                    ax.set_title(title)
-                    ax.axis('off')
-                fig.tight_layout()
+                # Repaint: output only in masked region, original elsewhere
+                repaint = mask_np * out_gray + (1 - mask_np) * src_gray
+                diff_repaint = np.abs(repaint - src_gray)
 
+                # Red overlay (semi-transparent)
+                overlay_rgb = np.stack([src_gray]*3, axis=-1)        # [H, W, 3]
+                alpha = 0.2
+                red_layer = np.zeros_like(overlay_rgb)
+                red_layer[..., 0] = 1.0  # pure red
+                overlay_rgb[mask_np > 0.5] = (
+                    (1 - alpha) * overlay_rgb[mask_np > 0.5] +
+                    alpha * red_layer[mask_np > 0.5]
+                )
+
+                # Plot
+                fig, axs = plt.subplots(2, 3, figsize=(9, 6))
+                axs = axs.ravel()
+                axs[0].imshow(src_gray, cmap='gray', vmin=0, vmax=1)
+                axs[0].set_title("input")
+
+                axs[1].imshow(mask_np, cmap='gray')
+                axs[1].set_title("mask")
+
+                axs[2].imshow(overlay_rgb)
+                axs[2].set_title("overlay")
+
+                axs[3].imshow(out_gray, cmap='gray', vmin=0, vmax=1)
+                axs[3].set_title("translated")
+
+                axs[4].imshow(diff, cmap='hot')
+                axs[4].set_title("abs-diff")
+
+                axs[5].imshow(diff_repaint, cmap='hot')
+                axs[5].set_title("abs-diff (repaint)")
+
+                for ax in axs:
+                    ax.axis('off')
+
+                plt.tight_layout()
+                
                 # use wandb caption
-                logs.append(wandb.Image(fig, caption=f"[{idx}] [{mode}] {prompt}"))
+                logs.append(wandb.Image(fig, caption=f"[{cnt}] [{mode}] {prompt}"))
                 plt.close(fig)
                 del fig
             
-                # Step 5: log
-                if self.accelerator.is_main_process:
-                    wandb_tracker.log({f"{tracker_key}_{mode}": logs}, step=global_step)
+            # Step 5: log
+            if self.accelerator.is_main_process:
+                wandb_tracker.log({f"{tracker_key}_{mode}": logs}, step=global_step)
         
         del pipeline
         gc.collect()

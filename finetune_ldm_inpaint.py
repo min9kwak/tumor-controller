@@ -4,14 +4,13 @@ import argparse
 import os
 from transformers import AutoTokenizer
 
-from config.ldm import ConfigLDM
+from config.ldm_inpaint import ConfigLDMInpaint
 from dataset.brats import BraTSProcessor
-from trainer.ldm import LDMFineTuner
+from dataset.preprocessing.helper import PromptBuilder
+from trainer.ldm_inpaint import LDMInpaintFineTuner
 from utils.util import set_env
 
-# TODO: trainable model -> unet only
 
-# TODO: move to config/base.py
 def load_yaml_config(yaml_path):
     """Load configuration from YAML file."""
     if not os.path.exists(yaml_path):
@@ -26,8 +25,7 @@ def load_yaml_config(yaml_path):
 
 def parse_arguments_with_yaml():
     parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument('--config', type=str, default='yaml/ldm.yaml',
-                        help='Path to YAML config file')
+    parser.add_argument('--config', type=str, default='yaml/ldm_inpaint.yaml', help='Path to YAML config file')
     config_args, remaining_args = parser.parse_known_args()
 
     # load YAML config
@@ -43,8 +41,8 @@ def parse_arguments_with_yaml():
     # Combine YAML args first, then CLI args (CLI takes precedence)
     combined_args = yaml_args + remaining_args
     
-    # create ConfigLDM object with combined arguments
-    args = ConfigLDM.parse_arguments(combined_args)
+    # create ConfigLDMInpaint object with combined arguments
+    args = ConfigLDMInpaint.parse_arguments(combined_args)
 
     # save config path
     args.config = config_args.config
@@ -52,7 +50,7 @@ def parse_arguments_with_yaml():
     return args
 
 
-def main(args: ConfigLDM):
+def main(args: ConfigLDMInpaint):
     
     print(f"🔧 Loading configuration from: {args.config}")
     print(f"📊 Training parameters:")
@@ -64,37 +62,34 @@ def main(args: ConfigLDM):
     print(f"  - Mixed precision: {args.mixed_precision}")
     print()
     
-    # 0. save config
-    args.save()
-    
-    # 1. load tokenizer for preparing datasets
-    tokenizer = AutoTokenizer.from_pretrained(
-        args.pretrained_model_name_or_path,
-        subfolder='tokenizer',
-        cache_dir=args.cache_dir,
-        use_fast=False
-    )
-    
-    # 2. create LDMFineTuner instance and train
-    # specify model names to use
+    # 1. models
     model_names = ['vae', 'unet', 'text_encoder', 'noise_scheduler']
-    
-    # specify model names to train
     # trainable_model_names = ['vae', 'unet']  # Train both for medical domain adaptation
     trainable_model_names = ['unet']  # Train both for medical domain adaptation
     
-    # 3. prepare data processor
-    processor = BraTSProcessor(config=vars(args), tokenizer=tokenizer)
+    setattr(args, 'model_names', model_names)
+    setattr(args, 'trainable_model_names', trainable_model_names)
     
-    # 4. create Trainer
-    finetuner = LDMFineTuner(
+    # 2. save config
+    args.save()
+    
+    # 3. load tokenizer and prompt builder
+    tokenizer = AutoTokenizer.from_pretrained(args.pretrained_model_name_or_path, subfolder='tokenizer',
+                                              cache_dir=args.cache_dir, use_fast=False)
+    prompt_builder = PromptBuilder()
+
+    # 4. prepare data processor
+    processor = BraTSProcessor(config=vars(args), tokenizer=tokenizer, prompt_builder=prompt_builder)
+    
+    # 5. create Trainer
+    finetuner = LDMInpaintFineTuner(
         args=args,
         model_names=model_names,
         trainable_model_names=trainable_model_names,
         processor=processor
     )
     
-    # 5. train
+    # 6. train
     finetuner.train()
 
 
@@ -104,7 +99,7 @@ if __name__ == "__main__":
     
     # Parse arguments with YAML config support
     args = parse_arguments_with_yaml()
-    args.task = 'finetune_ldm'
+    args.task = 'finetune_ldm_inpaint'
     args = set_env(args)
 
     np.random.seed(args.seed)

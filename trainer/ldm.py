@@ -37,7 +37,6 @@ from dataset.preprocessing.helper import PromptBuilder
 from utils.model import load_models
 
 
-
 class LDMFineTuner:
     def __init__(self,
                  args: argparse.Namespace,
@@ -285,7 +284,7 @@ class LDMFineTuner:
             noisy_latent = noisy_latent.to(dtype=self.weight_dtype)
 
             # Get the text embedding for conditioning
-            input_id = self.text_encoder(batch["input_id"], return_dict=False)[0]
+            input_ids = self.text_encoder(batch["input_ids"], return_dict=False)[0]
 
             # optional step
             if self.accelerator.unwrap_model(self.unet).config.in_channels == channels * 2:
@@ -294,7 +293,7 @@ class LDMFineTuner:
             pred = self.unet(
                 noisy_latent,
                 timesteps,
-                input_id,
+                input_ids,
                 return_dict=False,
             )[0]
 

@@ -1,6 +1,7 @@
 import os
 import json
 import numpy as np
+import torch
 import pickle
 import tqdm
 import random
@@ -18,9 +19,11 @@ from dataset.preprocessing.helper import PromptBuilder
 
 
 class BraTSProcessor(object):
-    def __init__(self, config: dict = None):
+    def __init__(self, config: dict = None, tokenizer: AutoTokenizer = None, prompt_builder: PromptBuilder = None):
         
         self.config = config
+        self.tokenizer = tokenizer
+        self.prompt_builder = prompt_builder
 
         assert self.config['modality'] in ['t1ce', 't2', 't1ce+t2'], \
             "modality must be one of ['t1ce', 't2', 't1ce+t2']"
@@ -111,6 +114,7 @@ class BraTSProcessor(object):
             'test': {'tumor': tumor_test, 'healthy': healthy_test}
         }
         data_info = self.load_data_info(data_filenames)
+        data_info = self.tokenize_prompts(data_info)
         
         return data_info
     
@@ -125,6 +129,42 @@ class BraTSProcessor(object):
                         data = json.load(f)
                     data_info[split][condition].append(data)
         return dict(data_info)
+    
+    def tokenize_prompts(self, data_info: dict):
+        """Tokenize prompts and add labels to data_info."""
+        np.random.seed(self.seed)
+
+        for split in ['train', 'test']:
+            for condition in ['tumor', 'healthy']:
+                label = 1 if condition == 'tumor' else 0
+                data_batch = data_info[split][condition]
+                prompts = []
+
+                for data in data_batch:
+                    p = np.random.random()
+                    if split == 'train' and p < self.config['proportion_empty_prompts']:
+                        prompts.append("")
+                    else:
+                        age = None if data['age'] == "unknown" else int(data['age'])
+                        tumor_size = int(data.get('tumor_size', 0))
+                        prompt_text = self.prompt_builder.generate_prompt(data['modality'], age, tumor_size)
+                        prompts.append(prompt_text)
+
+                # batch tokenize
+                input_ids = self.tokenizer(
+                    prompts,
+                    return_tensors='pt',
+                    padding='max_length',
+                    truncation=True,
+                    max_length=self.tokenizer.model_max_length
+                ).input_ids  # shape: (batch, seq_len)
+
+                for data, input_ids_item, prompt in zip(data_batch, input_ids, prompts):
+                    data['input_ids'] = input_ids_item
+                    data['label'] = label
+                    data['prompt'] = prompt
+
+        return data_info
 
     def print_summary(self, data_info):
         for split in ['train', 'test']:
@@ -142,24 +182,24 @@ class BraTSProcessor(object):
 class BraTSDataset(Dataset):
     def __init__(self,
                  data_info: list,
-                 prompt_builder: PromptBuilder,
                  image_transform=None,
                  conditioning_transform=None,
                  dilate_transform=None,
                  blur_transform=None,
-                 proportion_empty_prompts=0.0,
-                 return_keys=None):
+                 return_keys=None,
+                 seed=2025):
         
-        self.prompt_builder = prompt_builder
         self.image_transform = image_transform
         self.conditioning_transform = conditioning_transform
         self.dilate_transform = dilate_transform
         self.blur_transform = blur_transform
-        self.proportion_empty_prompts = proportion_empty_prompts
-        self.return_keys = return_keys or ['image', 'edge', 'dilate', 'blur', 'prompt', 'label', 'idx']
+        self.return_keys = return_keys or \
+            ['image', 'edge', 'dilate', 'blur', 'input_ids', 'prompt', 'label', 'idx']
+        self.seed = seed
 
         self.tumor_seg_by_slice = self._index_tumor_segs_by_slice(data_info)
         self.data_info = self._filter_invalid_healthy_slices(data_info)
+        self._assign_seg_for_healthy()
 
         # Define loader functions per field
         self.loaders = {
@@ -167,7 +207,8 @@ class BraTSDataset(Dataset):
             'edge': lambda d: self.conditioning_transform(pickle.load(open(d['edge'], 'rb'))),
             'dilate': lambda d: self.dilate_transform(self._load_seg(d)),
             'blur': lambda d: self.blur_transform(self._load_seg(d)),
-            'prompt': lambda d: self._build_prompt(d),
+            "prompt": lambda d: d["prompt"],
+            "input_ids": lambda d: d["input_ids"],
             'label': lambda d: int(d['label']),  # <- int cast here
             'idx': lambda d: d['idx'],           # will be injected in __getitem__
         }
@@ -189,7 +230,7 @@ class BraTSDataset(Dataset):
         filtered = []
         removed = 0
         for d in data_info:
-            if int(d['label']) == 0 and d['slice'] not in self.tumor_seg_by_slice:
+            if int(d['label']) == 0 and int(d['slice']) not in self.tumor_seg_by_slice:
                 removed += 1
                 continue
             filtered.append(d)
@@ -197,23 +238,32 @@ class BraTSDataset(Dataset):
             print(f"[BraTSDataset] Removed {removed} invalid healthy samples.")
         return filtered
 
+    def _assign_seg_for_healthy(self):
+        np.random.seed(self.seed)
+        for d in self.data_info:
+            if int(d["label"]) == 0:
+                slice_key = int(d["slice"])
+                candidates = self.tumor_seg_by_slice.get(slice_key, [])
+                if not candidates:
+                    raise ValueError(f"No tumor seg found for healthy slice {slice_key}")
+                d["assigned_seg"] = random.choice(candidates)
+            
     def _load_seg(self, d):
         if int(d['label']) == 1:
             return pickle.load(open(d['seg'], 'rb'))
         else:
-            slice_key = int(d['slice'])  # ← 변경
-            if slice_key not in self.tumor_seg_by_slice:
-                raise ValueError(f"No tumor seg found for healthy slice {slice_key}")
-            candidates = self.tumor_seg_by_slice[slice_key]
-            seg_path = random.choice(candidates)
-            return pickle.load(open(seg_path, 'rb'))
-
-    def _build_prompt(self, d):
-        age = None if d['age'] == "unknown" else int(d['age'])
-        tumor_size = int(d.get('tumor_size', 0))  # string → int, default=0 for healthy
-        if random.random() < self.proportion_empty_prompts:
-            return ""
-        return self.prompt_builder.generate_prompt(d['modality'], age, tumor_size)
+            return pickle.load(open(d['assigned_seg'], 'rb'))
+    
+    # def _load_seg(self, d):
+    #     if int(d['label']) == 1:
+    #         return pickle.load(open(d['seg'], 'rb'))
+    #     else:
+    #         slice_key = int(d['slice'])  # ← 변경
+    #         if slice_key not in self.tumor_seg_by_slice:
+    #             raise ValueError(f"No tumor seg found for healthy slice {slice_key}")
+    #         candidates = self.tumor_seg_by_slice[slice_key]
+    #         seg_path = random.choice(candidates)
+    #         return pickle.load(open(seg_path, 'rb'))
 
     def __getitem__(self, idx):
         d = self.data_info[idx]
@@ -229,26 +279,27 @@ if __name__ == '__main__':
     from torch.utils.data import DataLoader
     from accelerate import Accelerator
     from dataset.transforms import create_transforms, brats_collate_fn, create_mask_transforms
-    from functools import partial
 
     # 0. set environment
     config = {'server': 'psc',
-                'proportion_empty_prompts': 0.5,
-                'modality': 't1ce+t2',
-                'n_splits': 10,
-                'fold_index': 0,
-                'seed': 2025,
-                'max_train_samples': 1000}
+              'proportion_empty_prompts': 0.5,
+              'modality': 't1ce+t2',
+              'n_splits': 10,
+              'fold_index': 0,
+              'seed': 2025,
+              'max_train_samples': 1000}
     config = set_env(config)
 
     # 1. prepare dataset
     tokenizer = AutoTokenizer.from_pretrained('runwayml/stable-diffusion-v1-5',
-                                            subfolder='tokenizer',
-                                            cache_dir=config['cache_dir'],
-                                            use_fast=True)
-    processor = BraTSProcessor(config=config)
+                                              subfolder='tokenizer',
+                                              cache_dir=config['cache_dir'],
+                                              use_fast=True)
+    prompt_builder = PromptBuilder()
     accelerator = Accelerator()
-
+    
+    processor = BraTSProcessor(config=config, tokenizer=tokenizer, prompt_builder=prompt_builder)
+    
     with accelerator.main_process_first():
         data_info = processor.process()
 
@@ -267,25 +318,18 @@ if __name__ == '__main__':
     print("seg.shape", seg.shape)
 
     # 2. create dataset
-    from dataset.preprocessing.helper import PromptBuilder
-    from dataset.brats import BraTSDataset
-
-    prompter = PromptBuilder()
     image_transforms, conditioning_transforms = create_transforms(resolution=512, train=True)
     dilate_transform, blur_transform = create_mask_transforms(resolution=512, dilation_size=5, sigma=5.0)
 
     train_set = BraTSDataset(train_data_info,
-                            prompt_builder=prompter,
-                            image_transform=image_transforms,
-                            conditioning_transform=conditioning_transforms,
-                            dilate_transform=dilate_transform,
-                            blur_transform=blur_transform)
+                             image_transform=image_transforms,
+                             conditioning_transform=conditioning_transforms,
+                             dilate_transform=dilate_transform,
+                             blur_transform=blur_transform)
 
     # 3. create dataloader
     from dataset.transforms import brats_collate_fn
-    collate_fn = partial(brats_collate_fn, tokenizer=tokenizer)
-
-    train_loader = DataLoader(train_set, batch_size=4, shuffle=True, collate_fn=collate_fn)
+    train_loader = DataLoader(train_set, batch_size=4, shuffle=True, collate_fn=brats_collate_fn)
 
     for batch in train_loader:
         print("batch['idx']:", batch['idx'])
@@ -302,7 +346,6 @@ if __name__ == '__main__':
     dilate_transform, blur_transform = create_mask_transforms(resolution=512, dilation_size=5, sigma=5.0)
 
     test_set = BraTSDataset(data_info['test']['tumor'],
-                            prompt_builder=prompter,
                             image_transform=image_transforms,
                             conditioning_transform=conditioning_transforms,
                             dilate_transform=dilate_transform,
@@ -333,3 +376,28 @@ if __name__ == '__main__':
         plt.title('Blurred Mask')
         plt.axis('off')
         plt.show()
+
+    import time
+
+    train_set = BraTSDataset(train_data_info,
+                             image_transform=image_transforms,
+                             conditioning_transform=conditioning_transforms,
+                             dilate_transform=dilate_transform,
+                             blur_transform=blur_transform,
+                             return_keys=['prompt', 'input_ids'])
+
+    start_time = time.time()
+    for i in range(10):
+        sample = train_set[i]
+    end_time = time.time()
+    print(f"Dataset time taken: {end_time - start_time} seconds")
+
+
+    train_loader = DataLoader(train_set, batch_size=4, shuffle=True, collate_fn=brats_collate_fn)
+
+    start_time = time.time()
+    for i, batch in enumerate(train_loader):
+        if i == 9:
+            break
+    end_time = time.time()
+    print(f"Loader time taken: {end_time - start_time} seconds")

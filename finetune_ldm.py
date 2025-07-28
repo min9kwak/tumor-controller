@@ -64,6 +64,14 @@ def main(args: ConfigLDM):
     print(f"  - Mixed precision: {args.mixed_precision}")
     print()
     
+    # 2. models
+    model_names = ['vae', 'unet', 'text_encoder', 'noise_scheduler']
+    # trainable_model_names = ['vae', 'unet']  # Train both for medical domain adaptation
+    trainable_model_names = ['unet']  # Train both for medical domain adaptation
+    
+    setattr(args, 'model_names', model_names)
+    setattr(args, 'trainable_model_names', trainable_model_names)
+    
     # 0. save config
     args.save()
     
@@ -75,18 +83,10 @@ def main(args: ConfigLDM):
         use_fast=False
     )
     
-    # 2. create LDMFineTuner instance and train
-    # specify model names to use
-    model_names = ['vae', 'unet', 'text_encoder', 'noise_scheduler']
-    
-    # specify model names to train
-    # trainable_model_names = ['vae', 'unet']  # Train both for medical domain adaptation
-    trainable_model_names = ['unet']  # Train both for medical domain adaptation
-    
-    # 3. prepare data processor
+    # 2. prepare data processor
     processor = BraTSProcessor(config=vars(args), tokenizer=tokenizer)
     
-    # 4. create Trainer
+    # 3. create Trainer
     finetuner = LDMFineTuner(
         args=args,
         model_names=model_names,
@@ -94,7 +94,7 @@ def main(args: ConfigLDM):
         processor=processor
     )
     
-    # 5. train
+    # 4. train
     finetuner.train()
 
 

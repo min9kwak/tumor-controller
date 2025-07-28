@@ -36,7 +36,7 @@ echo "[INFO] printing GPU info"
 nvidia-smi
 
 echo "[INFO] starting Python training"
-python finetune_ldm.py
+python finetune_ldm_inpaint.py
 if [ $? -ne 0 ]; then
     echo "[ERROR] Python execution failed"; exit 1
 fi

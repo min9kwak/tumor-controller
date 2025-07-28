@@ -4,33 +4,20 @@ import monai.transforms as mt
 from monai.transforms.utils_morphological_ops import dilate
 
 
-def brats_collate_fn(batch, tokenizer):
+def brats_collate_fn(batch):
     collated = {}
     keys = batch[0].keys()
 
     for key in keys:
-        if key == "prompt":
-            # batch of prompt strings → tokenized
-            prompts = [item["prompt"] for item in batch]
-
-            input_ids = tokenizer(
-                prompts,
-                return_tensors='pt',
-                padding='max_length',
-                truncation=True,
-                max_length=tokenizer.model_max_length
-            ).input_ids  # shape: (batch, seq_len)
-            collated["input_ids"] = input_ids
-            # collated["attention_mask"] = tokenized["attention_mask"]
-            # collated["prompt"] = prompts  # keep raw prompt text for debugging/logging
-        elif isinstance(batch[0][key], torch.Tensor):
+        if isinstance(batch[0][key], torch.Tensor):
             collated[key] = torch.stack([item[key] for item in batch])
         elif isinstance(batch[0][key], (int, float)):
             collated[key] = torch.tensor([item[key] for item in batch])
-        elif key != "prompt":
+        else:
             collated[key] = [item[key] for item in batch]
 
     return collated
+
 
 
 def create_transforms(resolution: int = 512, train: bool = True):
