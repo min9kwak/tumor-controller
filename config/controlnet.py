@@ -60,5 +60,10 @@ class ConfigControlNet(ConfigBase):
 
         # additional arguments
         # parser.add_argument('--argument', type=type, default=default, help='')
+        parser.add_argument('--guidance_scale', type=float, default=7.5, help="Guidance scale for inference.")
+        parser.add_argument('--num_inference_steps', type=int, default=30, help="Number of inference steps.")
+        parser.add_argument('--strength', type=float, default=0.8, help="Strength for inference.")
+        parser.add_argument('--dilation_size', type=int, default=5, help="Dilation size for masking/inpainting.")
+        parser.add_argument('--sigma', type=float, default=5.0, help="Sigma for Gaussian blur.")
 
         return parser
