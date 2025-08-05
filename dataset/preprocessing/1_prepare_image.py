@@ -70,6 +70,13 @@ def generate_canny(vol_slice_01):
     edges = cv2.Canny(vol_uint8, low_thresh, high_thresh)
     return (edges > 0).astype(np.uint8)
 
+def generate_blur_canny(vol_slice_01):
+    """0~1 float → blur → uint8 0~255 → Canny → binary uint8"""
+    vol_uint8 = (vol_slice_01 * 255).astype(np.uint8)
+    blurred = cv2.GaussianBlur(vol_uint8, (5, 5), sigmaX=1.0)
+    edges = cv2.Canny(blurred, low_thresh, high_thresh)
+    return (edges > 0).astype(np.uint8)
+
 stat_records = []
 tumor_slice_records = []  # New list for tumor slice statistics
 
@@ -115,6 +122,9 @@ for patient_dir in tqdm.tqdm(patient_dirs, desc="Patients"):
         # Edge map: generate from normalized padded slices
         canny_t1ce = generate_canny(t1ce_01[z])
         canny_t2 = generate_canny(t2_01[z])
+
+        blur_canny_t1ce = generate_blur_canny(t1ce_01[z])
+        blur_canny_t2 = generate_blur_canny(t2_01[z])
         
         # set saving directory
         if tumor_pixels == 0:
@@ -140,6 +150,11 @@ for patient_dir in tqdm.tqdm(patient_dirs, desc="Patients"):
             pickle.dump(canny_t1ce, f)
         with open(f"{prefix}-edge-t2-{z}.pkl", "wb") as f:
             pickle.dump(canny_t2, f)
+        
+        with open(f"{prefix}-edge_blur-t1ce-{z}.pkl", "wb") as f:
+            pickle.dump(blur_canny_t1ce, f)
+        with open(f"{prefix}-edge_blur-t2-{z}.pkl", "wb") as f:
+            pickle.dump(blur_canny_t2, f)
 
         # note: save segmentation file of both tumor and healthy for consistency
         with open(f"{prefix}-seg-{z}.pkl", "wb") as f:

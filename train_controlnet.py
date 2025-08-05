@@ -1,13 +1,14 @@
 import numpy as np
+import json
 import yaml
 import argparse
 import os
 from transformers import AutoTokenizer
 
-from config.ldm_inpaint import ConfigLDMInpaint
+from config.controlnet import ConfigControlNet
 from dataset.brats import BraTSProcessor
 from dataset.preprocessing.helper import PromptBuilder
-from trainer.ldm_inpaint import LDMInpaintFineTuner
+from trainer.controlnet import ControlNetTrainer
 from utils.util import set_env
 
 
@@ -34,7 +35,7 @@ def load_yaml_config(yaml_path):
 
 def parse_arguments_with_yaml():
     parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument('--config', type=str, default='yaml/ldm_inpaint.yaml', help='Path to YAML config file')
+    parser.add_argument('--config', type=str, default='yaml/controlnet.yaml', help='Path to YAML config file')
     config_args, remaining_args = parser.parse_known_args()
 
     # load YAML config
@@ -50,8 +51,8 @@ def parse_arguments_with_yaml():
     # Combine YAML args first, then CLI args (CLI takes precedence)
     combined_args = yaml_args + remaining_args
     
-    # create ConfigLDMInpaint object with combined arguments
-    args = ConfigLDMInpaint.parse_arguments(combined_args)
+    # create ConfigControlNet object with combined arguments
+    args = ConfigControlNet.parse_arguments(combined_args)
 
     # save config path
     args.config = config_args.config
@@ -59,25 +60,60 @@ def parse_arguments_with_yaml():
     return args
 
 
-def main(args: ConfigLDMInpaint):
+def main(args: ConfigControlNet):
     
+    # 1. models
+    model_names = ['vae', 'text_encoder', 'noise_scheduler']
+    trainable_model_names = ['controlnet']
+    
+    setattr(args, 'model_names', model_names)
+    setattr(args, 'trainable_model_names', trainable_model_names)
+
+    # inherit args from ldm_inpaint
+    inherit_args = [
+        # ddp_parser
+        'server', 'pin_memory',
+        # data_parser
+        'modality', 'n_splits', 'fold_index', 'max_train_samples', 'resolution', 'seed', 'proportion_empty_prompts',
+        # train_parser
+        'enable_xformers_memory_efficient_attention',
+        # model_parser
+        'cross_attention_dim', 'tokenizer_name', 'cache_dir',
+        'pretrained_model_name_or_path', 'revision', 'variant',
+        # task_specific_parser
+        'offset_noise', 'dilation_size', 'sigma',
+    ]
+
+    # Check if LDM Inpaint checkpoint exists
+    args_ldm_path = f"checkpoints/finetune_ldm_inpaint/{args.ldm_inpaint_hash}/configs.json"
+    if not os.path.exists(args_ldm_path):
+        print(f"❌ Error: LDM Inpaint checkpoint not found!")
+        print(f"   Expected path: {args_ldm_path}")
+        print(f"   Please check if:")
+        print(f"   1. ldm_inpaint_hash is correct: '{args.ldm_inpaint_hash}'")
+        print(f"   2. LDM Inpaint training was completed successfully")
+        print(f"   3. The checkpoint directory exists")
+        raise FileNotFoundError(f"LDM Inpaint config not found: {args_ldm_path}")
+    
+    with open(args_ldm_path, 'r') as f:
+        args_ldm = json.load(f)
+
+    for arg_name in inherit_args:
+        if arg_name in args_ldm:
+            setattr(args, arg_name, args_ldm[arg_name])
+    setattr(args, 'task_previous', args_ldm['task'])
+    
+    # Print configuration AFTER inheritance
     print(f"🔧 Loading configuration from: {args.config}")
-    print(f"📊 Training parameters:")
+    print(f"📊 Training parameters (after inheritance from LDM Inpaint):")
     print(f"  - Batch size: {args.train_batch_size}")
     print(f"  - Learning rate: {args.learning_rate}")
     print(f"  - Modality: {args.modality}")
     print(f"  - Resolution: {args.resolution}")
     print(f"  - Epochs: {args.num_train_epochs}")
     print(f"  - Mixed precision: {args.mixed_precision}")
+    print(f"  - Previous task: {args.task_previous}")
     print()
-    
-    # 1. models
-    model_names = ['vae', 'unet', 'text_encoder', 'noise_scheduler']
-    # trainable_model_names = ['vae', 'unet']  # Train both for medical domain adaptation
-    trainable_model_names = ['unet']  # Train both for medical domain adaptation
-    
-    setattr(args, 'model_names', model_names)
-    setattr(args, 'trainable_model_names', trainable_model_names)
     
     # 2. save config
     args.save()
@@ -91,7 +127,7 @@ def main(args: ConfigLDMInpaint):
     processor = BraTSProcessor(config=vars(args), tokenizer=tokenizer, prompt_builder=prompt_builder)
     
     # 5. create Trainer
-    finetuner = LDMInpaintFineTuner(
+    finetuner = ControlNetTrainer(
         args=args,
         model_names=model_names,
         trainable_model_names=trainable_model_names,
@@ -108,7 +144,7 @@ if __name__ == "__main__":
     
     # Parse arguments with YAML config support
     args = parse_arguments_with_yaml()
-    args.task = 'finetune_ldm_inpaint'
+    args.task = 'controlnet'
     args = set_env(args)
 
     np.random.seed(args.seed)

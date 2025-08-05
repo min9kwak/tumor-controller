@@ -205,8 +205,8 @@ class ConfigBase(object):
                             help=("Save more memory by using setting grads to None instead of zero. Be aware, that this changes certain"
                                   " behaviors, so disable this argument if it causes any problems. More info:"
                                   " https://pytorch.org/docs/stable/generated/torch.optim.Optimizer.zero_grad.html"))
-        parser.add_argument('--validation_steps', type=int, default=100, help="Run validation every X steps.")
-        parser.add_argument('--logging_steps', type=int, default=20, help="Log training loss and metrics every X steps.")
+        parser.add_argument('--validation_steps', type=int, default=1000, help="Run validation every X steps.")
+        parser.add_argument('--logging_steps', type=int, default=50, help="Log training loss and metrics every X steps.")
         parser.add_argument('--num_validation_samples', type=int, default=4,
                             help="Number of validation samples to use.")
         
@@ -217,12 +217,6 @@ class ConfigBase(object):
         """Returns an `argparse.ArgumentParser` instance containing model-related arguments."""
         parser = argparse.ArgumentParser("Model Configuration", add_help=False)
 
-        parser.add_argument('--pretrained_model_name_or_path', type=str, default='runwayml/stable-diffusion-v1-5',
-                            help="Path to pretrained model or model identifier from huggingface.co/models.")        
-        parser.add_argument('--revision', type=str, default=None,
-                            help="Revision of pretrained model identifier from huggingface.co/models.")
-        parser.add_argument('--variant', type=str, default=None,
-                            help="Variant of the model files of the pretrained model identifier from huggingface.co/models, 'e.g.' fp16")
         parser.add_argument('--cross_attention_dim', type=int, default=768,
                             help="Cross-attention dimension for the UNet model.")
         parser.add_argument('--tokenizer_name', type=str, default=None,
@@ -242,8 +236,5 @@ class ConfigBase(object):
                             help="Save a checkpoint of the training state every X updates.")
         parser.add_argument('--checkpoints_total_limit', type=int, default=None,
                             help="Max number of checkpoints to store.")
-        parser.add_argument('--tracker_project_name', type=str, default="finetune_ldm",
-                            help="The `project_name` argument passed to Accelerator.init_trackers. "
-                                 "For more information see https://huggingface.co/docs/accelerate/v0.17.0/en/package_reference/accelerator#accelerate.Accelerator")
         
         return parser

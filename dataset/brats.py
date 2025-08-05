@@ -183,18 +183,26 @@ class BraTSDataset(Dataset):
     def __init__(self,
                  data_info: list,
                  image_transform=None,
-                 conditioning_transform=None,
+                 edge_transform=None,
                  dilate_transform=None,
                  blur_transform=None,
                  return_keys=None,
+                 blur_edge=False,
                  seed=2025):
         
         self.image_transform = image_transform
-        self.conditioning_transform = conditioning_transform
+        self.edge_transform = edge_transform
         self.dilate_transform = dilate_transform
         self.blur_transform = blur_transform
         self.return_keys = return_keys or \
             ['image', 'edge', 'dilate', 'blur', 'input_ids', 'prompt', 'label', 'idx']
+        
+        self.blur_edge = blur_edge
+        if self.blur_edge:
+            self.edge_expr = 'edge_blur'
+        else:
+            self.edge_expr = 'edge'
+
         self.seed = seed
 
         self.tumor_seg_by_slice = self._index_tumor_segs_by_slice(data_info)
@@ -204,7 +212,7 @@ class BraTSDataset(Dataset):
         # Define loader functions per field
         self.loaders = {
             'image': lambda d: self.image_transform(pickle.load(open(d['image'], 'rb'))),
-            'edge': lambda d: self.conditioning_transform(pickle.load(open(d['edge'], 'rb'))),
+            'edge': lambda d: self.edge_transform(pickle.load(open(d[self.edge_expr], 'rb'))),
             'dilate': lambda d: self.dilate_transform(self._load_seg(d)),
             'blur': lambda d: self.blur_transform(self._load_seg(d)),
             "prompt": lambda d: d["prompt"],
@@ -318,12 +326,12 @@ if __name__ == '__main__':
     print("seg.shape", seg.shape)
 
     # 2. create dataset
-    image_transforms, conditioning_transforms = create_transforms(resolution=512, train=True)
+    image_transforms, edge_transform = create_transforms(resolution=512, train=True)
     dilate_transform, blur_transform = create_mask_transforms(resolution=512, dilation_size=5, sigma=5.0)
 
     train_set = BraTSDataset(train_data_info,
                              image_transform=image_transforms,
-                             conditioning_transform=conditioning_transforms,
+                             edge_transform=edge_transform,
                              dilate_transform=dilate_transform,
                              blur_transform=blur_transform)
 
@@ -342,12 +350,12 @@ if __name__ == '__main__':
         break
 
     # 4. test set for quick validation
-    image_transforms, conditioning_transforms = create_transforms(resolution=512, train=False)
+    image_transforms, edge_transform = create_transforms(resolution=512, train=False)
     dilate_transform, blur_transform = create_mask_transforms(resolution=512, dilation_size=5, sigma=5.0)
 
     test_set = BraTSDataset(data_info['test']['tumor'],
                             image_transform=image_transforms,
-                            conditioning_transform=conditioning_transforms,
+                            edge_transform=edge_transform,
                             dilate_transform=dilate_transform,
                             blur_transform=blur_transform)
 
@@ -381,7 +389,7 @@ if __name__ == '__main__':
 
     train_set = BraTSDataset(train_data_info,
                              image_transform=image_transforms,
-                             conditioning_transform=conditioning_transforms,
+                             edge_transform=edge_transform,
                              dilate_transform=dilate_transform,
                              blur_transform=blur_transform,
                              return_keys=['prompt', 'input_ids'])

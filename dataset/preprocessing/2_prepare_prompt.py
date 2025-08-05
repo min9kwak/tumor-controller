@@ -40,6 +40,9 @@ for tumor_file in tqdm.tqdm(tumor_files):
     edge_file = tumor_file.replace('-brain-', '-edge-')
     assert os.path.exists(edge_file)
 
+    blur_edge_file = tumor_file.replace('-brain-', '-edge_blur-')
+    assert os.path.exists(blur_edge_file)
+
     seg_file = tumor_file.replace(f'-brain-{modality}-', '-seg-')
     assert os.path.exists(seg_file)
     
@@ -51,6 +54,7 @@ for tumor_file in tqdm.tqdm(tumor_files):
         'age': str(age) if age is not None else "unknown",
         'image': str(tumor_file),
         'edge': str(edge_file),
+        'blur_edge': str(blur_edge_file),
         'seg': str(seg_file),
         'label': '1'
     }
@@ -78,6 +82,9 @@ for healthy_file in tqdm.tqdm(healthy_files):
     edge_file = healthy_file.replace('-brain-', '-edge-')
     assert os.path.exists(edge_file)
 
+    blur_edge_file = healthy_file.replace('-brain-', '-edge_blur-')
+    assert os.path.exists(blur_edge_file)
+
     seg_file = healthy_file.replace(f'-brain-{modality}-', '-seg-')
     assert os.path.exists(seg_file)
 
@@ -88,6 +95,7 @@ for healthy_file in tqdm.tqdm(healthy_files):
         'age': str(age) if age is not None else "unknown",
         'image': str(healthy_file),
         'edge': str(edge_file),
+        'blur_edge': str(blur_edge_file),
         'seg': str(seg_file),
         'label': '0'
     }

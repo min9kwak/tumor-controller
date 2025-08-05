@@ -83,7 +83,8 @@ class LDMInpaintFineTuner:
         dilate_transform, _ = create_mask_transforms(resolution=self.args.resolution, dilation_size=self.args.dilation_size, sigma=self.args.sigma)
         
         train_set = BraTSDataset(data_info=train_data_info, image_transform=image_transform,
-                                 dilate_transform=dilate_transform, return_keys=return_keys)
+                                 dilate_transform=dilate_transform, return_keys=return_keys,
+                                 blur_edge=False, seed=self.args.seed)
 
         self.train_loader = DataLoader(dataset=train_set, batch_size=self.args.train_batch_size, shuffle=True,  collate_fn=brats_collate_fn,
                                        num_workers=self.args.dataloader_num_workers if hasattr(self.args, 'dataloader_num_workers') else 0)
@@ -96,7 +97,8 @@ class LDMInpaintFineTuner:
         # create full test dataset first to avoid healthy samples being filtered out
         test_info = data_info['test']['tumor'] + data_info['test']['healthy']
         full_test_set = BraTSDataset(data_info=test_info, image_transform=image_transform_val,
-                                     dilate_transform=dilate_transform, return_keys=return_keys)
+                                     dilate_transform=dilate_transform, return_keys=return_keys,
+                                     blur_edge=False, seed=self.args.seed)
         
         # get indices for tumor and healthy samples from the full test set
         tumor_indices = [i for i, d in enumerate(full_test_set.data_info) if int(d['label']) == 1]
@@ -656,6 +658,7 @@ class LDMInpaintFineTuner:
                         output_type='pt',
                         num_inference_steps=self.args.num_inference_steps,
                         guidance_scale=self.args.guidance_scale,
+                        strength=self.args.strength,
                         generator=generator
                     ).images[0] # (3, 512, 512)
                 

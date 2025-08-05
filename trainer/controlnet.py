@@ -27,16 +27,17 @@ from accelerate.utils import ProjectConfiguration, set_seed
 from tqdm.auto import tqdm
 
 import diffusers
-from diffusers import AutoencoderKL, UNet2DConditionModel
-from diffusers import StableDiffusionInpaintPipeline
+from diffusers import UNet2DConditionModel, ControlNetModel
+from diffusers import StableDiffusionControlNetInpaintPipeline
 from diffusers.optimization import get_scheduler
+from safetensors.torch import load_file
 
 from dataset.brats import BraTSDataset, BraTSProcessor
 from dataset.transforms import create_transforms, create_mask_transforms, brats_collate_fn
 from utils.model import load_models
 
 
-class LDMInpaintFineTuner:
+class ControlNetTrainer:
     def __init__(self,
                  args: argparse.Namespace,
                  model_names: List[str],
@@ -75,28 +76,34 @@ class LDMInpaintFineTuner:
             data_info = self.processor.process()
         
         # set return_keys
-        return_keys = ['image', 'dilate', 'input_ids', 'label', 'prompt', 'idx']
-        
+        return_keys = ['image', 'edge', 'dilate', 'input_ids', 'label', 'prompt', 'idx']
+
         # prepare train dataset
         train_data_info = data_info['train']['tumor'] + data_info['train']['healthy']
-        image_transform, _ = create_transforms(resolution=self.args.resolution, train=True)
-        dilate_transform, _ = create_mask_transforms(resolution=self.args.resolution, dilation_size=self.args.dilation_size, sigma=self.args.sigma)
+        image_transform, edge_transform = create_transforms(resolution=self.args.resolution, train=True)
+        dilate_transform, _ = create_mask_transforms(
+            resolution=self.args.resolution, dilation_size=self.args.dilation_size, sigma=self.args.sigma
+        )
         
-        train_set = BraTSDataset(data_info=train_data_info, image_transform=image_transform,
-                                 dilate_transform=dilate_transform, return_keys=return_keys)
+        train_set = BraTSDataset(data_info=train_data_info,
+                                 image_transform=image_transform, edge_transform=edge_transform,
+                                 dilate_transform=dilate_transform, blur_transform=None,
+                                 return_keys=return_keys, blur_edge=self.args.blur_edge, seed=self.args.seed)
 
         self.train_loader = DataLoader(dataset=train_set, batch_size=self.args.train_batch_size, shuffle=True,  collate_fn=brats_collate_fn,
                                        num_workers=self.args.dataloader_num_workers if hasattr(self.args, 'dataloader_num_workers') else 0)
         
-        # TODO: prepare test dataset
-        
         # prepare validation dataset (select some samples from test dataset)
-        image_transform_val, _ = create_transforms(resolution=self.args.resolution, train=False)
+        image_transform_val, edge_transform_val = create_transforms(resolution=self.args.resolution, train=False)
             
         # create full test dataset first to avoid healthy samples being filtered out
         test_info = data_info['test']['tumor'] + data_info['test']['healthy']
         full_test_set = BraTSDataset(data_info=test_info, image_transform=image_transform_val,
-                                     dilate_transform=dilate_transform, return_keys=return_keys)
+                                     edge_transform=edge_transform_val,
+                                     dilate_transform=dilate_transform,
+                                     blur_transform=None,
+                                     return_keys=return_keys,
+                                     blur_edge=False, seed=self.args.seed)
         
         # get indices for tumor and healthy samples from the full test set
         tumor_indices = [i for i, d in enumerate(full_test_set.data_info) if int(d['label']) == 1]
@@ -109,12 +116,15 @@ class LDMInpaintFineTuner:
         selected_tumor_idx = np.random.choice(len(tumor_indices),
                                               size=min(samples_per_class, len(tumor_indices)),
                                               replace=False)
-        selected_healthy_idx = np.random.choice(len(healthy_indices),
-                                                size=min(samples_per_class, len(healthy_indices)),
-                                                replace=False)
+        # selected_healthy_idx = np.random.choice(len(healthy_indices),
+        #                                         size=min(samples_per_class, len(healthy_indices)),
+        #                                         replace=False)
         
-        # get actual dataset indices
-        self.validation_indices = ([tumor_indices[i] for i in selected_tumor_idx] + [healthy_indices[i] for i in selected_healthy_idx])
+        # # get actual dataset indices
+        # self.validation_indices = ([tumor_indices[i] for i in selected_tumor_idx] + [healthy_indices[i] for i in selected_healthy_idx])
+
+        # tumor only
+        self.validation_indices = ([tumor_indices[i] for i in selected_tumor_idx])
         self.validation_set = full_test_set
 
     def train(self):
@@ -246,25 +256,19 @@ class LDMInpaintFineTuner:
         self.accelerator.end_training()
 
     def train_step(self, batch):
-        # TODO: self.unet -> select from trainable_model_names
-        with self.accelerator.accumulate(self.unet):
+        with self.accelerator.accumulate(getattr(self, self.trainable_model_names[0])):
             
             # create mask: [B, 1, H, W]; binary
             mask = batch['dilate']
             image = batch['image'].to(dtype=self.weight_dtype)
 
-            # apply mask to image: due to -1 ~ +1 normalization, -1 is black (masked)
             image_masked = image.clone()
-            # Expand mask to match image channels: [B, 1, H, W] -> [B, C, H, W]
             mask_expanded = mask.expand(-1, image.shape[1], -1, -1)
             image_masked[mask_expanded == 0] = -1.0
 
             # image to latent
-            latent_target = self.vae.encode(image).latent_dist.sample()
-            latent_target = latent_target * self.vae.config.scaling_factor
-
-            latent_masked = self.vae.encode(image_masked).latent_dist.sample()
-            latent_masked = latent_masked * self.vae.config.scaling_factor
+            latent_target = self.vae.encode(image).latent_dist.sample() * self.vae.config.scaling_factor
+            latent_masked = self.vae.encode(image_masked).latent_dist.sample() * self.vae.config.scaling_factor
 
             # sample and add noise to the latents
             if self.args.offset_noise:
@@ -276,12 +280,8 @@ class LDMInpaintFineTuner:
 
             bsz, channels, height, width = latent_masked.shape
 
-            # sample a random timestep for each image
-            timesteps = torch.randint(
-                0, self.noise_scheduler.config.num_train_timesteps, (bsz,), device=latent_masked.device
-            )
-            timesteps = timesteps.long()
-
+            # sample a random timestep for each image: noise is added to latent_masked
+            timesteps = torch.randint(0, self.noise_scheduler.config.num_train_timesteps, (bsz,), device=latent_masked.device).long()
             noisy_latent = self.noise_scheduler.add_noise(latent_masked.float(), noise.float(), timesteps)
             noisy_latent = noisy_latent.to(dtype=self.weight_dtype)
 
@@ -291,10 +291,31 @@ class LDMInpaintFineTuner:
             # Get the text embedding for conditioning
             encoder_hidden_state = self.text_encoder(batch["input_ids"], return_dict=False)[0]
 
-            # Unet forward
-            pred = self.unet(noisy_latent, timesteps, encoder_hidden_state, return_dict=False)[0]
+            # ControlNet conditioning
+            edge = batch['edge'].to(dtype=self.weight_dtype) # [B, 3, H, W]
+            
+            # ControlNet forward
+            down_block_res_samples, mid_block_res_sample = self.controlnet(
+                noisy_latent,
+                timesteps,
+                encoder_hidden_states=encoder_hidden_state,
+                controlnet_cond=edge,
+                return_dict=False
+            )
 
-            # ground truth noise
+            # Unet forward with ControlNet residuals
+            pred = self.unet(
+                noisy_latent,
+                timesteps,
+                encoder_hidden_states=encoder_hidden_state,
+                down_block_additional_residuals=[
+                    sample.to(dtype=self.weight_dtype) for sample in down_block_res_samples
+                ],
+                mid_block_additional_residual=mid_block_res_sample.to(dtype=self.weight_dtype),
+                return_dict=False,
+            )[0]
+
+            # compute target
             if self.noise_scheduler.config.prediction_type == "epsilon":
                 target = noise
             elif self.noise_scheduler.config.prediction_type == "v_prediction":
@@ -302,10 +323,8 @@ class LDMInpaintFineTuner:
             else:
                 raise ValueError(f"Unknown prediction type {self.noise_scheduler.config.prediction_type}")
             
-            # resize mask to latent size
+            # loss: masked MSE
             mask_latent = F.interpolate(mask.float(), size=target.shape[-2:], mode="nearest")
-
-            # loss: only over masked (inpaint) region
             loss = F.mse_loss(pred * mask_latent, target * mask_latent, reduction="sum") / (mask_latent.sum() + 1e-8)
 
             self.accelerator.backward(loss)
@@ -369,11 +388,34 @@ class LDMInpaintFineTuner:
         )
         self.logger = get_logger(__name__)
 
+    def _load_unet(self):
+        # load unet from finetune_ldm_inpaint checkpoint
+        base_dir = f"checkpoints/finetune_ldm_inpaint/{self.args.ldm_inpaint_hash}"
+
+        if self.args.checkpoint_num is not None:
+            # load from intermediate checkpoint
+            ckpt_dir = os.path.join(base_dir, f"checkpoint-{self.args.checkpoint_num}")
+            config_path = os.path.join(base_dir, "unet", "config.json")
+            state_path = os.path.join(ckpt_dir, "model.safetensors")
+
+            self.logger.info(f"[INFO] Loading UNet from checkpoint {self.args.checkpoint_num} at {ckpt_dir}")
+            config = UNet2DConditionModel.load_config(config_path)
+            unet = UNet2DConditionModel.from_config(config)
+            unet.load_state_dict(load_file(state_path))
+        else:
+            # load from final unet export
+            unet_dir = os.path.join(base_dir, "unet")
+            self.logger.info(f"[INFO] Loading UNet from final directory: {unet_dir}")
+            unet = UNet2DConditionModel.from_pretrained(unet_dir)
+        return unet
+    
     def _load_models(self, model_names):
-        # Selectively load models
-        vae, unet, text_encoder, controlnet, noise_scheduler = load_models(
-            self.args, model_names
-        )
+        # load backbone models
+        vae, _, text_encoder, _, noise_scheduler = load_models(self.args, model_names)
+        unet = self._load_unet()
+
+        # load controlnets
+        controlnet = ControlNetModel.from_unet(unet)
 
         model_dict = {
             'vae': vae,
@@ -545,61 +587,24 @@ class LDMInpaintFineTuner:
         # Step 1: load models
         # Load models based on whether they were trained or not
         if not is_final_validation:
-            # During training validation - unwrap only trainable models
-            if 'vae' in self.trainable_model_names:
-                vae = self.accelerator.unwrap_model(self.vae)
-            else:
-                vae = self.vae  # Use original model (not prepared by accelerator)
-            
-            if 'unet' in self.trainable_model_names:
-                unet = self.accelerator.unwrap_model(self.unet)
-            else:
-                unet = self.unet  # Use original model (not prepared by accelerator)
+            controlnet = self.accelerator.unwrap_model(self.controlnet)
         else:
-            # Final validation - load from saved checkpoints for trainable models, pretrained for others
-            if 'vae' in self.trainable_model_names:
-                vae = AutoencoderKL.from_pretrained(
-                    os.path.join(self.args.output_dir, "vae"),
-                    torch_dtype=self.weight_dtype
-                )
-            else:
-                # Load original pretrained VAE since it wasn't trained
-                vae = AutoencoderKL.from_pretrained(
-                    self.args.pretrained_model_name_or_path,
-                    subfolder="vae",
-                    revision=self.args.revision,
-                    variant=self.args.variant,
-                    torch_dtype=self.weight_dtype
-                )
-            
-            if 'unet' in self.trainable_model_names:
-                unet = UNet2DConditionModel.from_pretrained(
-                    os.path.join(self.args.output_dir, "unet"),
-                    torch_dtype=self.weight_dtype,
-                )
-            else:
-                # Load original pretrained UNet since it wasn't trained
-                unet = UNet2DConditionModel.from_pretrained(
-                    self.args.pretrained_model_name_or_path,
-                    subfolder="unet",
-                    revision=self.args.revision,
-                    variant=self.args.variant,
-                    torch_dtype=self.weight_dtype
-                )
+            controlnet = ControlNetModel.from_pretrained(
+                os.path.join(self.args.output_dir, "controlnet"),
+                torch_dtype=self.weight_dtype
+            )
+        controlnet.eval()
         
-        vae.eval()
-        unet.eval()
-        
-        # Step 2: define pipeline
-        pipeline = StableDiffusionInpaintPipeline.from_pretrained(
+        # TODO: check pipeline definition
+        # Use single ControlNet or MultiControlNet based on number of models
+        pipeline = StableDiffusionControlNetInpaintPipeline.from_pretrained(
             self.args.pretrained_model_name_or_path,
-            vae=vae,
+            vae=self.vae,
             text_encoder=self.text_encoder,
             tokenizer=self.processor.tokenizer,
-            unet=unet,
+            unet=self.unet,
+            controlnet=controlnet,
             safety_checker=None,
-            revision=self.args.revision,
-            variant=self.args.variant,
             torch_dtype=self.weight_dtype,
         )
         # using UniPCMultistepScheduler provides different results but reuqires less time. use default
@@ -629,33 +634,42 @@ class LDMInpaintFineTuner:
             # return []
         
         # Step 4: inference
-        for mode in ['original', 'reversed']:
+        for mode in ['original', 'symmetric']:
             logs = []
             for cnt, val_idx in enumerate(self.validation_indices):
                 
                 data = self.validation_set[val_idx]
                 
                 src = data['image']         # 0 ~ 1, (3, 512, 512)
-                mask = data['dilate']       # 0 ~ 1, (1, 512, 512)
+                edge = data['edge']         # 0 , 1, (3, 512, 512)
+                mask = data['dilate']       # 0 , 1, (1, 512, 512)
                 prompt = data['prompt']     # string
+                
+                # reverse prompt
+                try:
+                    prompt = self.processor.prompt_builder.reverse_prompt(prompt)
+                except Exception as e:
+                    self.logger.warning(f"Reverse prompt failed at idx={cnt} due to: {e}")
+                    continue
 
+                # reverse edge
                 if mode == 'original':
-                    prompt = prompt
+                    edge = edge
                 else:
-                    try:
-                        prompt = self.processor.prompt_builder.reverse_prompt(prompt)
-                    except Exception as e:
-                        self.logger.warning(f"Reverse prompt failed at idx={cnt} due to: {e}")
-                        continue
+                    edge = torch.flip(edge, dims=[1])
                 
                 with inference_ctx:
+                    # Prepare control_image parameter
                     out = pipeline(
                         prompt,
                         image=src,
                         mask_image=mask * 255.0,
+                        control_image=edge.unsqueeze(0),
                         output_type='pt',
                         num_inference_steps=self.args.num_inference_steps,
+                        strength=self.args.strength,
                         guidance_scale=self.args.guidance_scale,
+                        controlnet_conditioning_scale=self.args.controlnet_conditioning_scale,
                         generator=generator
                     ).images[0] # (3, 512, 512)
                 
@@ -682,10 +696,12 @@ class LDMInpaintFineTuner:
                 )
 
                 # Plot
-                fig, axs = plt.subplots(2, 3, figsize=(9, 6))
+                fig, axs = plt.subplots(2, 4, figsize=(12, 6))
                 axs = axs.ravel()
+
+                # inputs
                 axs[0].imshow(src_gray, cmap='gray', vmin=0, vmax=1)
-                axs[0].set_title("input")
+                axs[0].set_title("image")
 
                 axs[1].imshow(mask_np, cmap='gray')
                 axs[1].set_title("mask")
@@ -693,18 +709,24 @@ class LDMInpaintFineTuner:
                 axs[2].imshow(overlay_rgb)
                 axs[2].set_title("overlay")
 
-                axs[3].imshow(out_gray, cmap='gray', vmin=0, vmax=1)
-                axs[3].set_title("translated")
+                axs[3].imshow(edge[0], cmap='gray')
+                axs[3].set_title("edge")
 
-                axs[4].imshow(diff, cmap='hot')
-                axs[4].set_title("abs-diff")
+                # outputs
+                axs[4].imshow(out_gray, cmap='gray', vmin=0, vmax=1)
+                axs[4].set_title("translated")
 
-                axs[5].imshow(diff_repaint, cmap='hot')
-                axs[5].set_title("abs-diff (repaint)")
+                axs[5].imshow(diff, cmap='hot')
+                axs[5].set_title("trans-diff")
+
+                axs[6].imshow(repaint, cmap='gray', vmin=0, vmax=1)
+                axs[6].set_title("repaint")
+
+                axs[7].imshow(diff_repaint, cmap='hot')
+                axs[7].set_title("repaint-diff")
 
                 for ax in axs:
                     ax.axis('off')
-
                 plt.tight_layout()
                 
                 # use wandb caption
