@@ -88,7 +88,7 @@ class ControlNetTrainer:
         train_set = BraTSDataset(data_info=train_data_info,
                                  image_transform=image_transform, edge_transform=edge_transform,
                                  dilate_transform=dilate_transform, blur_transform=None,
-                                 return_keys=return_keys, blur_edge=self.args.blur_edge, seed=self.args.seed)
+                                 return_keys=return_keys, edge_blur=self.args.edge_blur, seed=self.args.seed)
 
         self.train_loader = DataLoader(dataset=train_set, batch_size=self.args.train_batch_size, shuffle=True,  collate_fn=brats_collate_fn,
                                        num_workers=self.args.dataloader_num_workers if hasattr(self.args, 'dataloader_num_workers') else 0)
@@ -103,7 +103,8 @@ class ControlNetTrainer:
                                      dilate_transform=dilate_transform,
                                      blur_transform=None,
                                      return_keys=return_keys,
-                                     blur_edge=False, seed=self.args.seed)
+                                     edge_blur=self.args.edge_blur,
+                                     seed=self.args.seed)
         
         # get indices for tumor and healthy samples from the full test set
         tumor_indices = [i for i, d in enumerate(full_test_set.data_info) if int(d['label']) == 1]

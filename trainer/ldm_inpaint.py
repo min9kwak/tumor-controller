@@ -84,7 +84,7 @@ class LDMInpaintFineTuner:
         
         train_set = BraTSDataset(data_info=train_data_info, image_transform=image_transform,
                                  dilate_transform=dilate_transform, return_keys=return_keys,
-                                 blur_edge=False, seed=self.args.seed)
+                                 edge_blur=False, seed=self.args.seed)
 
         self.train_loader = DataLoader(dataset=train_set, batch_size=self.args.train_batch_size, shuffle=True,  collate_fn=brats_collate_fn,
                                        num_workers=self.args.dataloader_num_workers if hasattr(self.args, 'dataloader_num_workers') else 0)
@@ -98,7 +98,7 @@ class LDMInpaintFineTuner:
         test_info = data_info['test']['tumor'] + data_info['test']['healthy']
         full_test_set = BraTSDataset(data_info=test_info, image_transform=image_transform_val,
                                      dilate_transform=dilate_transform, return_keys=return_keys,
-                                     blur_edge=False, seed=self.args.seed)
+                                     edge_blur=False, seed=self.args.seed)
         
         # get indices for tumor and healthy samples from the full test set
         tumor_indices = [i for i, d in enumerate(full_test_set.data_info) if int(d['label']) == 1]
@@ -604,7 +604,7 @@ class LDMInpaintFineTuner:
             variant=self.args.variant,
             torch_dtype=self.weight_dtype,
         )
-        # using UniPCMultistepScheduler provides different results but reuqires less time. use default
+        # using UniPCMultistepScheduler provides different results but requires less time. use default
         pipeline = pipeline.to(self.accelerator.device)
         pipeline.set_progress_bar_config(disable=True)
 

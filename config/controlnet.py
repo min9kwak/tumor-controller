@@ -71,7 +71,7 @@ class ConfigControlNet(ConfigBase):
         # parser.add_argument('--controlnet_mask', type=str2bool, default=True, help="Whether to use controlnet mask.")
         # parser.add_argument('--controlnet_edge', type=str2bool, default=True, help="Whether to use controlnet edge.")
 
-        parser.add_argument('--blur_edge', type=str2bool, default=False, help="Whether to blur edge.")
+        parser.add_argument('--edge_blur', type=str2bool, default=True, help="Whether to use blurred edge.")
         parser.add_argument('--controlnet_conditioning_scale', type=float, default=0.8, help="ControlNet conditioning scale.")
 
         return parser
