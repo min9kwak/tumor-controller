@@ -12,15 +12,6 @@ from trainer.controlnet import ControlNetTrainer
 from utils.util import set_env
 
 
-# TODO: make ControlNet config
-
-# TODO: make ControlNet trainer
-# TODO: load weights from UNet
-# TODO: set ControlNet as trainable model only
-
-# TODO: use opposite location edgemap for inference
-
-
 def load_yaml_config(yaml_path):
     """Load configuration from YAML file."""
     if not os.path.exists(yaml_path):
@@ -115,24 +106,28 @@ def main(args: ConfigControlNet):
     print(f"  - Previous task: {args.task_previous}")
     print()
     
-    # 2. save config
-    args.save()
-    
-    # 3. load tokenizer and prompt builder
+    # 2. load tokenizer and prompt builder
     tokenizer = AutoTokenizer.from_pretrained(args.pretrained_model_name_or_path, subfolder='tokenizer',
                                               cache_dir=args.cache_dir, use_fast=False)
     prompt_builder = PromptBuilder()
 
-    # 4. prepare data processor
+    # 3. prepare data processor
     processor = BraTSProcessor(config=vars(args), tokenizer=tokenizer, prompt_builder=prompt_builder)
     
-    # 5. create Trainer
+    # Add preprocessing parameters to args
+    setattr(args, 'low_thresh', processor.low_thresh)
+    setattr(args, 'high_thresh', processor.high_thresh)
+    
+    # 4. create Trainer
     finetuner = ControlNetTrainer(
         args=args,
         model_names=model_names,
         trainable_model_names=trainable_model_names,
         processor=processor
     )
+
+    # 5. save config
+    args.save()
     
     # 6. train
     finetuner.train()
