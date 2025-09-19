@@ -54,7 +54,7 @@ for tumor_file in tqdm.tqdm(tumor_files):
         'age': str(age) if age is not None else "unknown",
         'image': str(tumor_file),
         'edge': str(edge_file),
-        'blur_edge': str(blur_edge_file),
+        'edge_blur': str(blur_edge_file),
         'seg': str(seg_file),
         'label': '1'
     }
@@ -95,7 +95,7 @@ for healthy_file in tqdm.tqdm(healthy_files):
         'age': str(age) if age is not None else "unknown",
         'image': str(healthy_file),
         'edge': str(edge_file),
-        'blur_edge': str(blur_edge_file),
+        'edge_blur': str(blur_edge_file),
         'seg': str(seg_file),
         'label': '0'
     }

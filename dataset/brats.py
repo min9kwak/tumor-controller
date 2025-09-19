@@ -42,6 +42,26 @@ class BraTSProcessor(object):
         self.seed = self.config['seed']
         self.n_splits = self.config['n_splits']
         self.fold_index = self.config['fold_index']
+        
+        # Load preprocessing parameters
+        self._load_preprocessing_config()
+    
+    def _load_preprocessing_config(self):
+        """Load preprocessing parameters from preprocessing_config.json."""
+        preprocessing_config_path = os.path.join(self.config['data_root'], "preprocessing_config.json")
+        
+        assert os.path.exists(preprocessing_config_path), f"Preprocessing config not found at {preprocessing_config_path}"
+        with open(preprocessing_config_path, 'r') as f:
+            preprocessing_config = json.load(f)
+        
+        # Store preprocessing parameters
+        self.preprocessing_config = preprocessing_config
+        self.low_thresh = preprocessing_config["canny_thresholds"]["low"]
+        self.high_thresh = preprocessing_config["canny_thresholds"]["high"]
+        
+        print(f"📋 Loaded preprocessing config from: {preprocessing_config_path}")
+        print(f"  - Canny low threshold: {self.low_thresh}")
+        print(f"  - Canny high threshold: {self.high_thresh}")
     
     def load_data(self):
         """Load data files and perform basic labeling."""
@@ -187,7 +207,7 @@ class BraTSDataset(Dataset):
                  dilate_transform=None,
                  blur_transform=None,
                  return_keys=None,
-                 blur_edge=False,
+                 edge_blur=False,
                  seed=2025):
         
         self.image_transform = image_transform
@@ -197,8 +217,8 @@ class BraTSDataset(Dataset):
         self.return_keys = return_keys or \
             ['image', 'edge', 'dilate', 'blur', 'input_ids', 'prompt', 'label', 'idx']
         
-        self.blur_edge = blur_edge
-        if self.blur_edge:
+        self.edge_blur = edge_blur
+        if self.edge_blur:
             self.edge_expr = 'edge_blur'
         else:
             self.edge_expr = 'edge'

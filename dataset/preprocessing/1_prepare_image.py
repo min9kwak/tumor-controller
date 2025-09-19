@@ -25,7 +25,7 @@ param = {
     "tumor_upper": 3000,
     "slice_range": list(range(80, 130)),
     "spatial_size": (256, 256),
-    "canny_thresholds": {"low": 100, "high": 200},
+    "canny_thresholds": {"low": 30, "high": 80},
     "normalization": {
         "type": "percentile_minmax",
         "percentile": 99.5
