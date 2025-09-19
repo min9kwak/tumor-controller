@@ -1,0 +1,12 @@
+# ControlNet Image Generation Configuration
+
+# Model Settings
+model:
+  controlnet_id: "2025-08-08_18-52-26"  # ControlNet checkpoint ID
+  
+# Inference Parameters
+inference:
+  num_steps: 30
+  strength: 1.0
+  guidance_scale: 8.0
+  controlnet_conditioning_scale: 1.0
