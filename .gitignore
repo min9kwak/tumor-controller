@@ -140,6 +140,7 @@ scratch/
 scripts/
 logs/
 notebook/
+image_generation/
 
 # IDE
 .vscode
