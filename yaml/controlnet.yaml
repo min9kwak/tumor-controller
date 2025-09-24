@@ -1,19 +1,23 @@
 # ControlNet Fine-tuning Configuration
 # Training parameters
 train_batch_size: 8
-learning_rate: 5e-4  # ControlNet은 보통 더 높은 learning rate 사용
-num_train_epochs: 1 # 10
+learning_rate: 5e-4  ################### ControlNet은 보통 더 높은 learning rate 사용
+num_train_epochs: 30 # 20 / 10
 max_train_steps: null
 gradient_accumulation_steps: 4
 gradient_checkpointing: false
+
+# TODO: cosine, 2025-07-28_18-32-16 / null
 
 # Model parameters
 mixed_precision: null
 
 # ControlNet specific parameters - UNet loading from LDM Inpaint checkpoint
-ldm_inpaint_hash: "2025-07-29_22-58-44"
-checkpoint_num: 17000
-blur_edge: false
+# 새로 학습한 것: 2025-08-07_12-13-05 (20 epochs)
+# 새로 학습한 것: 2025-08-07_16-54-03 (30 epochs)
+ldm_inpaint_hash: "2025-08-08_11-14-10" ############# 2025-07-29_13-45-40 / 2025-08-08_11-14-10
+checkpoint_num: null                    #############
+edge_blur: True                         ############# try true
 
 # masking and blurring parameters
 dilation_size: 5
@@ -22,7 +26,7 @@ sigma: 5.0
 # Inference parameters
 strength: 1.0
 guidance_scale: 7.5
-controlnet_conditioning_scale: 0.8
+controlnet_conditioning_scale: 0.8 ############# try 0.5
 num_inference_steps: 30
 tumor_size: "medium-sized"
 
@@ -35,8 +39,8 @@ logging_steps: 50
 checkpointing_steps: 1000
 
 # Optimization parameters
-lr_scheduler: "constant"
-lr_warmup_steps: 0
+lr_scheduler: "cosine" ############# cosine
+lr_warmup_steps: 500     ############# 500
 adam_beta1: 0.9
 adam_beta2: 0.999
 adam_weight_decay: 1e-2

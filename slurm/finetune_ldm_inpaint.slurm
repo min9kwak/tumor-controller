@@ -4,7 +4,7 @@
 #SBATCH -p GPU-shared
 # #SBATCH --gres=gpu:1             # ✅ 아무 GPU 1개 요청 (권장 테스트용)
 #SBATCH --gres=gpu:h100-80:1   # 🔒 H100-80 GPU 요청 (대기 길 수 있음)
-#SBATCH -t 14:00:00
+#SBATCH -t 8:00:00
 #SBATCH -o /ocean/projects/med230010p/mkwak/tumor-controller/logs/finetune_ldm_%j.out
 #SBATCH -e /ocean/projects/med230010p/mkwak/tumor-controller/logs/finetune_ldm_%j.err
 
