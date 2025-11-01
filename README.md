@@ -139,7 +139,7 @@ Our framework consists of three sequential stages:
 ### **Stage 1️⃣: Fine-tuning Latent Diffusion Model (LDM) for Inpainting**
 
 <p align="center">
-  <img src="assets/images/figure_step1.pdf" width="800"/>
+  <img src="assets/images/figure_step1-1.png" width="800"/>
 </p>
 
 **Script:** `finetune_ldm.py`
@@ -190,7 +190,7 @@ checkpoints/finetune_ldm_inpaint/{experiment_id}/
 ### **Stage 2️⃣: Training ControlNet with Edge Conditioning**
 
 <p align="center">
-  <img src="assets/images/figure_step2.pdf" width="800"/>
+  <img src="assets/images/figure_step2-1.png" width="800"/>
 </p>
 
 **Script:** `train_controlnet.py`
@@ -241,7 +241,7 @@ checkpoints/controlnet/{experiment_id}/
 ### **Stage 3️⃣: Healthy Brain Image Generation**
 
 <p align="center">
-  <img src="assets/images/figure_inference.pdf" width="800"/>
+  <img src="assets/images/figure_inference-1.png" width="800"/>
 </p>
 
 **Script:** `generate_controlnet.py`
@@ -339,28 +339,37 @@ image_generation/{experiment_id}/
 
 ## 📈 Visualization
 
-### Method Comparison
+### Results: Method Comparison & Robustness Analysis
+
+<table>
+<tr>
+<td width="50%">
+
+**Method Comparison**
 
 Comparison of our ControlNet-based approach with baseline methods:
 
-<p align="center">
-  <img src="assets/images/figure2.pdf" width="900"/>
-</p>
+<img src="assets/images/figure2-1.png" width="100%"/>
 
 **Key observations:**
 - **LDM (without edge conditioning)**: May lose fine anatomical details
 - **ControlNet (with edge guidance)**: Preserves structural integrity while successfully removing tumors
 - **Edge flipping strategy**: Leverages contralateral hemisphere information for realistic reconstruction
 
-### Robustness to Mask Size
+</td>
+<td width="50%">
 
-Clinical applicability requires robustness to imprecise tumor delineation. We evaluate performance with **expanded ROI masks** (simulating rough clinical annotations):
+**Robustness to Mask Size**
 
-<p align="center">
-  <img src="assets/images/figure3.pdf" width="900"/>
-</p>
+Clinical applicability requires robustness to imprecise tumor delineation. We evaluate performance with **expanded ROI masks**:
+
+<img src="assets/images/figure3-1.png" width="100%"/>
 
 > **💡 Clinical Relevance:** In real clinical settings, precisely delineating tumor boundaries is challenging and time-consuming. Our method demonstrates robust performance even when the input mask is expanded beyond exact tumor boundaries (ROI-style annotation), making it more practical for clinical deployment.
+
+</td>
+</tr>
+</table>
 
 ### Overview Plots
 
