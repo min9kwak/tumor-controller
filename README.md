@@ -138,6 +138,10 @@ Our framework consists of three sequential stages:
 
 ### **Stage 1️⃣: Fine-tuning Latent Diffusion Model (LDM) for Inpainting**
 
+<p align="center">
+  <img src="assets/images/figure_step1.pdf" width="800"/>
+</p>
+
 **Script:** `finetune_ldm.py`
 
 **Purpose:**  
@@ -184,6 +188,10 @@ checkpoints/finetune_ldm_inpaint/{experiment_id}/
 ---
 
 ### **Stage 2️⃣: Training ControlNet with Edge Conditioning**
+
+<p align="center">
+  <img src="assets/images/figure_step2.pdf" width="800"/>
+</p>
 
 **Script:** `train_controlnet.py`
 
@@ -232,6 +240,10 @@ checkpoints/controlnet/{experiment_id}/
 
 ### **Stage 3️⃣: Healthy Brain Image Generation**
 
+<p align="center">
+  <img src="assets/images/figure_inference.pdf" width="800"/>
+</p>
+
 **Script:** `generate_controlnet.py`
 
 **Purpose:**  
@@ -258,10 +270,9 @@ Key parameters:
 - `threshold`: 0.05 (threshold for binary mask after smoothing)
 
 **DDIM Baseline Comparison** (optional):
-- `ddim.image_dir`: Path to pre-generated DDIM results for comparison
-- Used for comparing with baseline method from [Wolleb et al., 2022](https://link.springer.com/chapter/10.1007/978-3-031-16452-1_4)
+- `ddim.image_dir`: Path to pre-generated DDIM results for comparison with the baseline method ([Wolleb et al., 2022](https://link.springer.com/chapter/10.1007/978-3-031-16452-1_4))
 
-> ⚠️ **Note**: DDIM comparison is optional. If `ddim.image_dir` is not provided or images are missing, the visualization will simply skip the DDIM row. This baseline comparison will be better integrated in future versions.
+> ⚠️ **Note**: DDIM comparison is optional. If `ddim.image_dir` is not provided or images are missing, the visualization will simply skip the DDIM row.
 
 **Usage:**
 ```bash
@@ -328,32 +339,42 @@ image_generation/{experiment_id}/
 
 ## 📈 Visualization
 
+### Method Comparison
+
+Comparison of our ControlNet-based approach with baseline methods:
+
+<p align="center">
+  <img src="assets/images/figure2.pdf" width="900"/>
+</p>
+
+**Key observations:**
+- **LDM (without edge conditioning)**: May lose fine anatomical details
+- **ControlNet (with edge guidance)**: Preserves structural integrity while successfully removing tumors
+- **Edge flipping strategy**: Leverages contralateral hemisphere information for realistic reconstruction
+
+### Robustness to Mask Size
+
+Clinical applicability requires robustness to imprecise tumor delineation. We evaluate performance with **expanded ROI masks** (simulating rough clinical annotations):
+
+<p align="center">
+  <img src="assets/images/figure3.pdf" width="900"/>
+</p>
+
+> **💡 Clinical Relevance:** In real clinical settings, precisely delineating tumor boundaries is challenging and time-consuming. Our method demonstrates robust performance even when the input mask is expanded beyond exact tumor boundaries (ROI-style annotation), making it more practical for clinical deployment.
+
 ### Overview Plots
 
 The generation script produces comprehensive visualization plots showing:
 
 **Default Mask Results** (`default/plot/`): 4×4 grid visualization
 - **Row 1**: Input tumor image, segmentation mask, overlay, and flipped edge map
-- **Row 2**: DDIM baseline results ([Wolleb et al., 2022](https://link.springer.com/chapter/10.1007/978-3-031-16452-1_4)) - *optional, shown only if available*
+- **Row 2**: DDIM baseline results - *optional, shown only if available*
 - **Row 3**: LDM inpainting results (without edge conditioning)
 - **Row 4**: ControlNet results (with edge conditioning)
-
-> ⚠️ **Note on DDIM Baseline**: The DDIM row (Row 2) is for comparison with the baseline diffusion model for medical anomaly detection. If DDIM results are not available, this row will show "Not Available" in the visualization plot.
-
-Each plot demonstrates:
-- ✅ Successful tumor removal
-- ✅ Preservation of anatomical structures
-- ✅ Realistic tissue appearance
-- ✅ Maintenance of brain symmetry
 
 **Comparison Plots** (`expanded/plot/`): 2×5 grid comparison
 - **Row 1**: Default mask results (LDM vs. ControlNet)
 - **Row 2**: Expanded mask results (smoother boundary transitions)
-
-This side-by-side comparison highlights:
-- Edge conditioning effects
-- Mask expansion benefits
-- Structural preservation quality
 
 **📄 Detailed quantitative evaluation and additional results will be provided in separate PDF documents.**
 
@@ -427,30 +448,6 @@ This produces smoother, more realistic transitions between generated and origina
 
 ---
 
-## 🙏 Acknowledgments
-
-- **BraTS 2020** organizers for providing the dataset
-- **Stable Diffusion** team for the foundational model
-- **ControlNet** authors for the edge conditioning framework
-- **Wolleb et al.** for the DDIM baseline method for medical anomaly detection:
-  ```
-  Wolleb, J., Bieder, F., Sandkühler, R., & Cattin, P. C. (2022, September). 
-  Diffusion models for medical anomaly detection. 
-  In International Conference on Medical image computing and computer-assisted intervention 
-  (pp. 35-45). Cham: Springer Nature Switzerland.
-  ```
-
----
-
-## 📧 Contact
-
-For questions or collaboration opportunities:
-- **Author**: Mingeon Kwak
-- **Email**: [your-email@domain.com]
-- **GitHub**: [@min9kwak](https://github.com/min9kwak)
-
----
-
 ## 🔧 Troubleshooting
 
 ### Common Issues
@@ -483,14 +480,11 @@ vim yaml/generate_controlnet.yaml
 
 ---
 
-## 🗺️ Development Roadmap
+## 🔮 Future Works
 
-- [ ] Better integration of DDIM baseline comparison within the codebase
-- [ ] Multi-scale edge conditioning
-- [ ] 3D volume generation
-- [ ] Real-time inference optimization
-- [ ] Clinical validation study
-- [ ] Integration with treatment planning software
+- [ ] Extension to 3D volume generation
+- [ ] Handling tumors located at the brain center
+- [ ] Multi-contrast MRI (T1ce, T2, FLAIR) simultaneous processing
 
 ---
 
