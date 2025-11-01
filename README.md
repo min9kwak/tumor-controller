@@ -1,6 +1,6 @@
-# BrainNormalizer: Reconstructing Healthy Brain Images from Tumor MRIs using Masked ControlNet with Edge Conditioning
+# 🧠 BrainNormalizer: Reconstructing Healthy Brain Images from Tumor MRIs using Masked ControlNet with Edge Conditioning
 
-## Background and Motivation
+## 🎯 Background and Motivation
 
 In brain tumor treatment, accurate interpretation of brain MRI is crucial for tumor delineation, treatment planning, and surgical decisions. A **patient-specific healthy baseline brain image** would provide tremendous value for:
 - Precise tumor boundary identification
@@ -12,14 +12,14 @@ However, this poses a fundamental challenge:
 - **High anatomical variability**: Each patient's brain structure is unique, making generic healthy brain templates unsuitable
 - **Need for patient-specific reconstruction**: A personalized approach is required to generate realistic healthy brain images
 
-## Our Approach
+## 💡 Our Approach
 
 Previous methods for tumor removal in brain MRI often fail to preserve anatomical structures. We developed **BrainNormalizer**, a novel framework that leverages **Canny Edge Maps** with **ControlNet** to:
-- Remove tumor regions from diseased brain MRI
-- Reconstruct healthy tissue while **preserving patient-specific anatomical structures**
-- Utilize edge conditioning to maintain structural integrity during inpainting
+- ✨ Remove tumor regions from diseased brain MRI
+- 🔧 Reconstruct healthy tissue while **preserving patient-specific anatomical structures**
+- 🎨 Utilize edge conditioning to maintain structural integrity during inpainting
 
-Our method exploits the domain knowledge that **healthy brains are roughly symmetric**, using flipped edge maps as structural guidance for the generation process.
+> **🔑 Key Innovation:** Our method exploits the domain knowledge that **healthy brains are roughly symmetric**, using flipped edge maps as structural guidance for the generation process.
 
 ---
 
@@ -54,7 +54,7 @@ tumor-controller/
 
 ---
 
-## Dataset
+## 📊 Dataset
 
 ### Data Source
 We use the **BraTS 2020** (Brain Tumor Segmentation Challenge 2020) dataset, which contains:
@@ -132,11 +132,11 @@ data/
 
 ---
 
-## Model Framework
+## 🚀 Model Framework
 
 Our framework consists of three sequential stages:
 
-### **Stage 1: Fine-tuning Latent Diffusion Model (LDM) for Inpainting**
+### **Stage 1️⃣: Fine-tuning Latent Diffusion Model (LDM) for Inpainting**
 
 **Script:** `finetune_ldm.py`
 
@@ -183,7 +183,7 @@ checkpoints/finetune_ldm_inpaint/{experiment_id}/
 
 ---
 
-### **Stage 2: Training ControlNet with Edge Conditioning**
+### **Stage 2️⃣: Training ControlNet with Edge Conditioning**
 
 **Script:** `train_controlnet.py`
 
@@ -230,7 +230,7 @@ checkpoints/controlnet/{experiment_id}/
 
 ---
 
-### **Stage 3: Healthy Brain Image Generation**
+### **Stage 3️⃣: Healthy Brain Image Generation**
 
 **Script:** `generate_controlnet.py`
 
@@ -241,8 +241,8 @@ Generate patient-specific healthy brain images by:
 3. **⭐ Edge Flipping**: Flip edge map vertically to provide contralateral hemisphere guidance
 4. **Inpainting**: Generate healthy tissue in tumor region while preserving structure
 
-**Key Innovation:**  
-We exploit the **approximate bilateral symmetry** of healthy brains. By flipping the edge map, we provide structural guidance from the healthy hemisphere to reconstruct the tumor-affected region.
+> **💎 Key Innovation:**  
+> We exploit the **approximate bilateral symmetry** of healthy brains. By flipping the edge map, we provide structural guidance from the healthy hemisphere to reconstruct the tumor-affected region.
 
 **Configuration:** `yaml/generate_controlnet.yaml`
 
@@ -256,6 +256,12 @@ Key parameters:
 **Expanded Mask Parameters** (for smoother boundaries):
 - `sigma`: [3.0, 3.0] (Gaussian smoothing for mask expansion)
 - `threshold`: 0.05 (threshold for binary mask after smoothing)
+
+**DDIM Baseline Comparison** (optional):
+- `ddim.image_dir`: Path to pre-generated DDIM results for comparison
+- Used for comparing with baseline method from [Wolleb et al., 2022](https://link.springer.com/chapter/10.1007/978-3-031-16452-1_4)
+
+> ⚠️ **Note**: DDIM comparison is optional. If `ddim.image_dir` is not provided or images are missing, the visualization will simply skip the DDIM row. This baseline comparison will be better integrated in future versions.
 
 **Usage:**
 ```bash
@@ -320,50 +326,46 @@ image_generation/{experiment_id}/
 
 ---
 
-## Results
+## 📈 Visualization
 
-### Quantitative Evaluation
+### Overview Plots
 
-*[To be added: SSIM, PSNR, FID metrics comparing ControlNet vs. baseline methods]*
+The generation script produces comprehensive visualization plots showing:
 
-### Qualitative Results
+**Default Mask Results** (`default/plot/`): 4×4 grid visualization
+- **Row 1**: Input tumor image, segmentation mask, overlay, and flipped edge map
+- **Row 2**: DDIM baseline results ([Wolleb et al., 2022](https://link.springer.com/chapter/10.1007/978-3-031-16452-1_4)) - *optional, shown only if available*
+- **Row 3**: LDM inpainting results (without edge conditioning)
+- **Row 4**: ControlNet results (with edge conditioning)
 
-*[To be added: Visual comparison of generated healthy brain images showing:]*
-- *Successful tumor removal*
-- *Preservation of anatomical structures*
-- *Realistic tissue appearance*
-- *Symmetry maintenance*
+> ⚠️ **Note on DDIM Baseline**: The DDIM row (Row 2) is for comparison with the baseline diffusion model for medical anomaly detection. If DDIM results are not available, this row will show "Not Available" in the visualization plot.
 
-**📄 Detailed results will be provided in separate PDF documents.**
+Each plot demonstrates:
+- ✅ Successful tumor removal
+- ✅ Preservation of anatomical structures
+- ✅ Realistic tissue appearance
+- ✅ Maintenance of brain symmetry
+
+**Comparison Plots** (`expanded/plot/`): 2×5 grid comparison
+- **Row 1**: Default mask results (LDM vs. ControlNet)
+- **Row 2**: Expanded mask results (smoother boundary transitions)
+
+This side-by-side comparison highlights:
+- Edge conditioning effects
+- Mask expansion benefits
+- Structural preservation quality
+
+**📄 Detailed quantitative evaluation and additional results will be provided in separate PDF documents.**
 
 ---
 
-## Installation
+## ⚡ Quick Start
 
-### Requirements
+### 📋 Requirements
 - Python 3.8+
 - CUDA 11.7+ (for GPU acceleration)
 - 32GB+ RAM recommended
 - ~50GB disk space for checkpoints and data
-
-### Setup
-
-```bash
-# Clone repository
-git clone https://github.com/min9kwak/tumor-controller.git
-cd tumor-controller
-
-# Create conda environment
-conda create -n tumor python=3.8
-conda activate tumor
-
-# Install dependencies
-pip install -r requirements.txt
-```
-
----
-
-## Quick Start
 
 ### Full Pipeline Example
 
@@ -386,9 +388,9 @@ python generate_controlnet.py --config yaml/generate_controlnet.yaml
 
 ---
 
-## Key Technical Details
+## 🔬 Key Technical Details
 
-### Edge Map Flipping (Critical Innovation)
+### ⚙️ Edge Map Flipping (Critical Innovation)
 
 ```python
 # In generate_controlnet.py
@@ -408,7 +410,7 @@ output = pipeline_controlnet(
 
 This leverages the **approximate bilateral symmetry** of healthy brains, allowing the model to use structural information from the healthy hemisphere to reconstruct the tumor-affected region.
 
-### Expanded Mask for Smooth Transitions
+### 🎭 Expanded Mask for Smooth Transitions
 
 ```python
 # Gaussian smoothing + thresholding for natural boundaries
@@ -425,34 +427,22 @@ This produces smoother, more realistic transitions between generated and origina
 
 ---
 
-## Citation
-
-```bibtex
-@article{brainnormalizer2025,
-  title={BrainNormalizer: Reconstructing Healthy Brain Images from Tumor MRIs using Masked ControlNet with Edge Conditioning},
-  author={Kwak, Mingeon and [Co-authors]},
-  journal={[Journal Name]},
-  year={2025}
-}
-```
-
----
-
-## License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
-
----
-
-## Acknowledgments
+## 🙏 Acknowledgments
 
 - **BraTS 2020** organizers for providing the dataset
 - **Stable Diffusion** team for the foundational model
 - **ControlNet** authors for the edge conditioning framework
+- **Wolleb et al.** for the DDIM baseline method for medical anomaly detection:
+  ```
+  Wolleb, J., Bieder, F., Sandkühler, R., & Cattin, P. C. (2022, September). 
+  Diffusion models for medical anomaly detection. 
+  In International Conference on Medical image computing and computer-assisted intervention 
+  (pp. 35-45). Cham: Springer Nature Switzerland.
+  ```
 
 ---
 
-## Contact
+## 📧 Contact
 
 For questions or collaboration opportunities:
 - **Author**: Mingeon Kwak
@@ -461,7 +451,7 @@ For questions or collaboration opportunities:
 
 ---
 
-## Troubleshooting
+## 🔧 Troubleshooting
 
 ### Common Issues
 
@@ -493,8 +483,9 @@ vim yaml/generate_controlnet.yaml
 
 ---
 
-## Development Roadmap
+## 🗺️ Development Roadmap
 
+- [ ] Better integration of DDIM baseline comparison within the codebase
 - [ ] Multi-scale edge conditioning
 - [ ] 3D volume generation
 - [ ] Real-time inference optimization
@@ -503,5 +494,5 @@ vim yaml/generate_controlnet.yaml
 
 ---
 
-**Last Updated**: November 2025
+**Last Updated**: November 2025 | **Status**: 🚧 In Active Development
 
