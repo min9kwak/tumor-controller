@@ -6,7 +6,16 @@ model:
   
 # Inference Parameters
 inference:
-  num_steps: 30
+  num_steps: 50
   strength: 1.0
-  guidance_scale: 8.0
+  guidance_scale: 7.5
   controlnet_conditioning_scale: 1.0
+
+# Expanded Mask Parameters
+expanded_mask:
+  sigma: [3.0, 3.0]  # Gaussian smoothing sigma (y, x)
+  threshold: 0.05    # Binary threshold after smoothing
+
+# DDIM Image Directory
+ddim:
+  image_dir: "/ocean/projects/med230010p/mkwak/normal-brain-recon/image_generation/2025-09-27_17-43-02/ddim"

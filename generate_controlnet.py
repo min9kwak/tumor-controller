@@ -15,6 +15,9 @@ from dataset.brats import BraTSProcessor, BraTSDataset
 from dataset.preprocessing.helper import PromptBuilder
 from dataset.transforms import create_transforms, create_mask_transforms
 
+from monai.transforms import GaussianSmooth
+import monai.transforms as mt
+
 from accelerate import Accelerator
 from transformers import AutoTokenizer, CLIPTextModel
 from diffusers import AutoencoderKL, UNet2DConditionModel, ControlNetModel
@@ -50,6 +53,16 @@ def setup_argparse():
     parser.add_argument('--controlnet-conditioning-scale', type=float,
                       help='ControlNet conditioning scale')
     
+    # Expanded mask parameters
+    parser.add_argument('--expanded-sigma', type=float, nargs=2,
+                      help='Gaussian smoothing sigma [y, x] for expanded mask')
+    parser.add_argument('--expanded-threshold', type=float,
+                      help='Binary threshold for expanded mask')
+    
+    # DDIM parameters
+    parser.add_argument('--ddim-image-dir', type=str,
+                      help='Directory containing DDIM images for overview visualization')
+    
     return parser
 
 
@@ -73,7 +86,67 @@ def merge_configs(yaml_config, args):
     if args.controlnet_conditioning_scale is not None:
         config.inference.controlnet_conditioning_scale = args.controlnet_conditioning_scale
     
+    if args.expanded_sigma is not None:
+        config.expanded_mask.sigma = args.expanded_sigma
+    if args.expanded_threshold is not None:
+        config.expanded_mask.threshold = args.expanded_threshold
+    
+    if args.ddim_image_dir is not None:
+        if not hasattr(config, 'ddim'):
+            config.ddim = edict()
+        config.ddim.image_dir = args.ddim_image_dir
+    
     return config
+
+
+# DDIM image transform for resizing 256x256 -> 512x512 (defined once for efficiency)
+DDIM_TRANSFORM = mt.Compose([
+    mt.EnsureChannelFirst(channel_dim="no_channel"),  # Add channel dimension
+    mt.CastToType(dtype=torch.float32),
+    mt.Resize((512, 512), mode="bilinear"),  # Resize to 512x512
+    mt.Lambda(lambda x: x.clamp_(0.0, 1.0)),  # Ensure [0, 1] range
+])
+
+
+def load_ddim_image(config, patient_id, modality, z_slice):
+    """Load DDIM image from the specified directory."""
+    # Check if DDIM config exists
+    if not hasattr(config, 'ddim') or not hasattr(config.ddim, 'image_dir'):
+        print(f"⚠️ Warning: DDIM image directory not configured")
+        return None
+    
+    ddim_image_name = os.path.join(config.ddim.image_dir, f"{patient_id}-ddim-{modality}-{z_slice}.npy")
+    
+    if not os.path.exists(ddim_image_name):
+        print(f"⚠️ Warning: DDIM image not found: {ddim_image_name}")
+        return None
+    
+    try:
+        ddim_image = np.load(ddim_image_name)
+        
+        # Validate original shape
+        if ddim_image.shape != (1, 1, 256, 256):
+            print(f"⚠️ Warning: Unexpected DDIM image shape {ddim_image.shape}, expected (1, 1, 256, 256)")
+            return None
+        
+        # Process the image using MONAI transforms (consistent with project)
+        ddim_image = torch.tensor(ddim_image).float()
+        ddim_image = ddim_image.clip(0, 1)
+        ddim_image = ddim_image[0, 0]  # (256, 256)
+        
+        # Apply pre-defined DDIM transform and convert back to numpy
+        ddim_image = DDIM_TRANSFORM(ddim_image.numpy())  # Apply to numpy array
+        ddim_image = ddim_image.squeeze(0).numpy()  # Remove channel dim and convert to numpy (512, 512)
+        
+        # Final validation
+        if ddim_image.shape != (512, 512):
+            print(f"⚠️ Warning: Final DDIM image shape {ddim_image.shape}, expected (512, 512)")
+            return None
+            
+        return ddim_image
+    except Exception as e:
+        print(f"⚠️ Warning: Failed to load DDIM image {ddim_image_name}: {e}")
+        return None
 
 
 def main(args=None):
@@ -94,14 +167,25 @@ def main(args=None):
 
     # create output directory structure
     output_base_dir = os.path.join("image_generation", experiment_id)
-    output_dir_controlnet = os.path.join(output_base_dir, "controlnet")
-    output_dir_ldm = os.path.join(output_base_dir, "ldm")
-    output_dir_plot = os.path.join(output_base_dir, "plot")
-
-    # create directories
-    os.makedirs(output_dir_controlnet, exist_ok=True)
-    os.makedirs(output_dir_ldm, exist_ok=True)
-    os.makedirs(output_dir_plot, exist_ok=True)
+    
+    # setup subdirectories for default and expanded masks
+    output_dirs = {
+        'default': {
+            'controlnet': os.path.join(output_base_dir, "default", "controlnet"),
+            'ldm': os.path.join(output_base_dir, "default", "ldm"),
+            'plot': os.path.join(output_base_dir, "default", "plot")
+        },
+        'expanded': {
+            'controlnet': os.path.join(output_base_dir, "expanded", "controlnet"),
+            'ldm': os.path.join(output_base_dir, "expanded", "ldm"),
+            'plot': os.path.join(output_base_dir, "expanded", "plot")
+        }
+    }
+    
+    # create all directories
+    for mask_type in output_dirs:
+        for subdir in output_dirs[mask_type].values():
+            os.makedirs(subdir, exist_ok=True)
 
     # controlnet config
     controlnet_config_file = os.path.join('checkpoints/controlnet', config.model.controlnet_id, 'configs.json')
@@ -164,6 +248,7 @@ def main(args=None):
     config.paths.controlnet_config = controlnet_config_file
     config.paths.ldm_config = ldm_config_path
     config.paths.yaml_config = args.config
+    config.paths.output_dirs = output_dirs
 
     # save experiment config
     experiment_config_path = os.path.join(output_base_dir, 'configs.json')
@@ -247,6 +332,11 @@ def main(args=None):
         
         edge = torch.flip(edge, dims=[1])
         
+        # Reset generator for reproducibility
+        sample_seed = controlnet_config.seed + sample_idx
+        
+        # Default ControlNet generation
+        ################# generator.manual_seed(sample_seed)
         with torch.no_grad():
             with inference_ctx:
                 out_controlnet = pipeline_controlnet(
@@ -262,6 +352,8 @@ def main(args=None):
                     generator=generator
                 ).images[0]
         
+        # Default LDM generation
+        ################# generator.manual_seed(sample_seed)
         with torch.no_grad():
             with inference_ctx:
                 out_ldm = pipeline_ldm(
@@ -275,12 +367,13 @@ def main(args=None):
                     generator=generator
                 ).images[0] # (3, 512, 512)
 
-        # Save generated images as numpy arrays
+        # =============================== Default Mask ===============================
+        # Save generated images as numpy arrays (default mask)
         controlnet_filename = f"{patient_id}-controlnet-{modality}-{slice_num}.npy"
         ldm_filename = f"{patient_id}-ldm-{modality}-{slice_num}.npy"
         
-        controlnet_save_path = os.path.join(output_dir_controlnet, controlnet_filename)
-        ldm_save_path = os.path.join(output_dir_ldm, ldm_filename)
+        controlnet_save_path = os.path.join(output_dirs['default']['controlnet'], controlnet_filename)
+        ldm_save_path = os.path.join(output_dirs['default']['ldm'], ldm_filename)
         
         np.save(controlnet_save_path, out_controlnet.detach().cpu().numpy())
         np.save(ldm_save_path, out_ldm.detach().cpu().numpy())
@@ -315,6 +408,9 @@ def main(args=None):
         diff_translated = np.abs(out_gray_controlnet - out_gray_ldm)
         diff_repaint_comparison = np.abs(repaint_controlnet - repaint_ldm)
 
+        # Load DDIM image
+        ddim_image = load_ddim_image(config, patient_id, modality, slice_num)
+        
         # Plot 4x4 grid
         fig, axs = plt.subplots(4, 4, figsize=(16, 16))
 
@@ -329,20 +425,29 @@ def main(args=None):
         axs[0, 2].set_title("overlay")
 
         axs[0, 3].imshow(edge[0], cmap='gray')
-        axs[0, 3].set_title("edge")
+        axs[0, 3].set_title("edge (flipped)")
 
-        # Second row: ControlNet results
-        axs[1, 0].imshow(out_gray_controlnet, cmap='gray', vmin=0, vmax=1)
-        axs[1, 0].set_title("ControlNet translated")
-
-        axs[1, 1].imshow(diff_controlnet, cmap='hot')
-        axs[1, 1].set_title("ControlNet trans-diff")
-
-        axs[1, 2].imshow(repaint_controlnet, cmap='gray', vmin=0, vmax=1)
-        axs[1, 2].set_title("ControlNet repaint")
-
-        axs[1, 3].imshow(diff_repaint_controlnet, cmap='hot')
-        axs[1, 3].set_title("ControlNet repaint-diff")
+        # Second row: DDIM results
+        if ddim_image is not None:
+            axs[1, 0].imshow(ddim_image, cmap='gray', vmin=0, vmax=1)
+            axs[1, 0].set_title("DDIM translated")
+            
+            diff_ddim = np.abs(src_gray - ddim_image)
+            axs[1, 1].imshow(diff_ddim, cmap='hot')
+            axs[1, 1].set_title("DDIM trans-diff")
+            
+            repaint_ddim = mask_np * ddim_image + (1 - mask_np) * src_gray
+            axs[1, 2].imshow(repaint_ddim, cmap='gray', vmin=0, vmax=1)
+            axs[1, 2].set_title("DDIM repaint")
+            
+            diff_repaint_ddim = np.abs(repaint_ddim - src_gray)
+            axs[1, 3].imshow(diff_repaint_ddim, cmap='hot')
+            axs[1, 3].set_title("DDIM repaint-diff")
+        else:
+            # If DDIM image not available, show empty plots
+            for j in range(4):
+                axs[1, j].axis('off')
+                axs[1, j].text(0.5, 0.5, 'DDIM\nNot Available', ha='center', va='center', transform=axs[1, j].transAxes)
 
         # Third row: LDM results
         axs[2, 0].imshow(out_gray_ldm, cmap='gray', vmin=0, vmax=1)
@@ -357,16 +462,18 @@ def main(args=None):
         axs[2, 3].imshow(diff_repaint_ldm, cmap='hot')
         axs[2, 3].set_title("LDM repaint-diff")
 
-        # Fourth row: Comparison between ControlNet and LDM
-        axs[3, 0].axis('off')  # empty
+        # Fourth row: ControlNet results
+        axs[3, 0].imshow(out_gray_controlnet, cmap='gray', vmin=0, vmax=1)
+        axs[3, 0].set_title("ControlNet translated")
 
-        axs[3, 1].imshow(diff_translated, cmap='hot')
-        axs[3, 1].set_title("Diff: ControlNet vs LDM\n(translated)")
+        axs[3, 1].imshow(diff_controlnet, cmap='hot')
+        axs[3, 1].set_title("ControlNet trans-diff")
 
-        axs[3, 2].axis('off')  # empty
+        axs[3, 2].imshow(repaint_controlnet, cmap='gray', vmin=0, vmax=1)
+        axs[3, 2].set_title("ControlNet repaint")
 
-        axs[3, 3].imshow(diff_repaint_comparison, cmap='hot')
-        axs[3, 3].set_title("Diff: ControlNet vs LDM\n(repaint)")
+        axs[3, 3].imshow(diff_repaint_controlnet, cmap='hot')
+        axs[3, 3].set_title("ControlNet repaint-diff")
 
         # Remove axis from all subplots
         for i in range(4):
@@ -375,19 +482,168 @@ def main(args=None):
 
         plt.tight_layout()
 
-        # Save overview plot
+        # Save overview plot (default mask)
         overview_filename = f"{patient_id}-overview-{modality}-{slice_num}.png"
-        overview_save_path = os.path.join(output_dir_plot, overview_filename)
+        overview_save_path = os.path.join(output_dirs['default']['plot'], overview_filename)
         plt.savefig(overview_save_path, dpi=300, bbox_inches='tight')
         plt.close()
+
+        # =============================== Expanded Mask ===============================
+        # ────────────── 1️⃣ Gaussian Smooth + Threshold ──────────────
+        mask_torch = torch.tensor(mask_np, dtype=torch.float32).unsqueeze(0)  # (1, H, W)
+        
+        # Get parameters from config
+        sigma = tuple(config.expanded_mask.sigma)  # (sigma_y, sigma_x)
+        threshold_val = config.expanded_mask.threshold
+
+        gaussian = GaussianSmooth(sigma=sigma)
+        mask_blurred = gaussian(mask_torch)              # soft mask (0~1)
+        mask_binary = (mask_blurred > threshold_val).float().squeeze(0).numpy()  # (H, W)
+
+        # ────────────── 2️⃣ Foreground mask로 유효 영역 제한 ──────────────
+        foreground_mask = (src_gray != 0.0).astype(np.float32)
+        mask_final = mask_binary * foreground_mask  # brain 영역 밖 제거
+        mask_expanded = torch.tensor(mask_final).float().unsqueeze(0)
+
+        # Expanded ControlNet generation
+        ################# generator.manual_seed(sample_seed)
+        with torch.no_grad():
+            with inference_ctx:
+                out_controlnet_expanded = pipeline_controlnet(
+                    prompt,
+                    image=src,
+                    mask_image=mask_expanded * 255.0,
+                    control_image=edge.unsqueeze(0),
+                    output_type='pt',
+                    num_inference_steps=config.inference.num_steps,
+                    strength=config.inference.strength,
+                    guidance_scale=config.inference.guidance_scale,
+                    controlnet_conditioning_scale=config.inference.controlnet_conditioning_scale,
+                    generator=generator
+                ).images[0]
+        
+        # Expanded LDM generation
+        ################# generator.manual_seed(sample_seed)
+        with torch.no_grad():
+            with inference_ctx:
+                out_ldm_expanded = pipeline_ldm(
+                    prompt,
+                    image=src,
+                    mask_image=mask_expanded * 255.0,
+                    output_type='pt',
+                    num_inference_steps=config.inference.num_steps,
+                    guidance_scale=config.inference.guidance_scale,
+                    strength=config.inference.strength,
+                    generator=generator
+                ).images[0]
+
+        # Save expanded results
+        controlnet_save_path_expanded = os.path.join(output_dirs['expanded']['controlnet'], controlnet_filename)
+        ldm_save_path_expanded = os.path.join(output_dirs['expanded']['ldm'], ldm_filename)
+        
+        np.save(controlnet_save_path_expanded, out_controlnet_expanded.detach().cpu().numpy())
+        np.save(ldm_save_path_expanded, out_ldm_expanded.detach().cpu().numpy())
+
+        # Prepare visualization data for comparison
+        out_gray_controlnet_expanded = out_controlnet_expanded.mean(0).detach().cpu().numpy()
+        out_gray_ldm_expanded = out_ldm_expanded.mean(0).detach().cpu().numpy()
+        
+        # Repaint with masks
+        repaint_controlnet_default = mask_np * out_gray_controlnet + (1 - mask_np) * src_gray
+        repaint_ldm_default = mask_np * out_gray_ldm + (1 - mask_np) * src_gray
+        
+        mask_expanded_np = mask_final  # Already numpy array (H, W)
+        repaint_controlnet_expanded = mask_expanded_np * out_gray_controlnet_expanded + (1 - mask_expanded_np) * src_gray
+        repaint_ldm_expanded = mask_expanded_np * out_gray_ldm_expanded + (1 - mask_expanded_np) * src_gray
+        
+        # Create overlays for both masks
+        # Default mask overlay
+        overlay_default = np.stack([src_gray]*3, axis=-1)
+        alpha = 0.3
+        red_layer = np.zeros_like(overlay_default)
+        red_layer[..., 0] = 1.0
+        overlay_default[mask_np > 0.5] = (
+            (1 - alpha) * overlay_default[mask_np > 0.5] +
+            alpha * red_layer[mask_np > 0.5]
+        )
+        
+        # Expanded mask overlay
+        overlay_expanded = np.stack([src_gray]*3, axis=-1)
+        overlay_expanded[mask_expanded_np > 0.5] = (
+            (1 - alpha) * overlay_expanded[mask_expanded_np > 0.5] +
+            alpha * red_layer[mask_expanded_np > 0.5]
+        )
+        
+        # Plot 2x5 comparison
+        fig, axs = plt.subplots(2, 5, figsize=(25, 10))
+        
+        # First row: Default mask
+        axs[0, 0].imshow(overlay_default)
+        axs[0, 0].set_title("Default Mask\n(Image + Mask Overlay)")
+        
+        axs[0, 1].imshow(out_gray_ldm, cmap='gray', vmin=0, vmax=1)
+        axs[0, 1].set_title("Default Mask\n(LDM Generated)")
+        
+        axs[0, 2].imshow(out_gray_controlnet, cmap='gray', vmin=0, vmax=1)
+        axs[0, 2].set_title("Default Mask\n(ControlNet Generated)")
+        
+        axs[0, 3].imshow(repaint_ldm_default, cmap='gray', vmin=0, vmax=1)
+        axs[0, 3].set_title("Default Mask\n(LDM Repaint)")
+        
+        axs[0, 4].imshow(repaint_controlnet_default, cmap='gray', vmin=0, vmax=1)
+        axs[0, 4].set_title("Default Mask\n(ControlNet Repaint)")
+        
+        # Second row: Expanded mask
+        axs[1, 0].imshow(overlay_expanded)
+        axs[1, 0].set_title("Expanded Mask\n(Image + Mask Overlay)")
+        
+        axs[1, 1].imshow(out_gray_ldm_expanded, cmap='gray', vmin=0, vmax=1)
+        axs[1, 1].set_title("Expanded Mask\n(LDM Generated)")
+        
+        axs[1, 2].imshow(out_gray_controlnet_expanded, cmap='gray', vmin=0, vmax=1)
+        axs[1, 2].set_title("Expanded Mask\n(ControlNet Generated)")
+        
+        axs[1, 3].imshow(repaint_ldm_expanded, cmap='gray', vmin=0, vmax=1)
+        axs[1, 3].set_title("Expanded Mask\n(LDM Repaint)")
+        
+        axs[1, 4].imshow(repaint_controlnet_expanded, cmap='gray', vmin=0, vmax=1)
+        axs[1, 4].set_title("Expanded Mask\n(ControlNet Repaint)")
+        
+        # Remove axis from all subplots
+        for i in range(2):
+            for j in range(5):
+                axs[i, j].axis('off')
+        
+        plt.tight_layout()
+        
+        # Save comparison plot
+        comparison_filename = f"{patient_id}-comparison-{modality}-{slice_num}.png"
+        comparison_save_path = os.path.join(output_dirs['expanded']['plot'], comparison_filename)
+        plt.savefig(comparison_save_path, dpi=300, bbox_inches='tight')
+        plt.close()
+
         
         # Memory cleanup (del variables every iteration, cache cleanup periodically)
         del fig, axs
-        del out_controlnet, out_ldm
+        del out_controlnet, out_ldm, out_controlnet_expanded, out_ldm_expanded
         del src_gray, mask_np, overlay_rgb
-        del out_gray_controlnet, out_gray_ldm
+        del out_gray_controlnet, out_gray_ldm, out_gray_controlnet_expanded, out_gray_ldm_expanded
+        del mask_torch, mask_blurred, mask_binary, mask_final, mask_expanded, mask_expanded_np
+        del repaint_controlnet_default, repaint_ldm_default
+        del repaint_controlnet_expanded, repaint_ldm_expanded
+        del overlay_default, overlay_expanded, red_layer
         del diff_controlnet, diff_ldm, diff_translated, diff_repaint_comparison
         del repaint_controlnet, repaint_ldm, diff_repaint_controlnet, diff_repaint_ldm
+        
+        # Clean up DDIM-related variables if they exist
+        if 'ddim_image' in locals() and ddim_image is not None:
+            del ddim_image
+        if 'diff_ddim' in locals():
+            del diff_ddim
+        if 'repaint_ddim' in locals():
+            del repaint_ddim
+        if 'diff_repaint_ddim' in locals():
+            del diff_repaint_ddim
         
         # Periodic cache cleanup
         if sample_idx % 10 == 0:
