@@ -141,6 +141,9 @@ scripts/
 logs/
 notebook/
 image_generation/
+generated_images.zip
+tmp/
+depr/
 
 # IDE
 .vscode
