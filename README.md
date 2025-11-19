@@ -1,8 +1,10 @@
-# 🧠 BrainNormalizer: Reconstructing Healthy Brain Images from Tumor MRIs using Masked ControlNet with Edge Conditioning
+# 🧠 BrainNormalizer: Anatomy-Informed Pseudo-Healthy Brain Reconstruction from Tumor MRI via Edge-Guided ControlNet
+
+[![arXiv](https://img.shields.io/badge/arXiv-2511.12853-b31b1b.svg)](https://www.arxiv.org/abs/2511.12853)
 
 ## 🎯 Background and Motivation
 
-In brain tumor treatment, accurate interpretation of brain MRI is crucial for tumor delineation, treatment planning, and surgical decisions. A **patient-specific healthy baseline brain image** would provide tremendous value for:
+In brain tumor treatment, accurate interpretation of brain MRI is crucial for tumor delineation, treatment planning, and surgical decisions. A **patient-specific pseudo-healthy baseline brain image** would provide tremendous value for:
 - Precise tumor boundary identification
 - Treatment response assessment  
 - Surgical planning and guidance
@@ -10,13 +12,13 @@ In brain tumor treatment, accurate interpretation of brain MRI is crucial for tu
 However, this poses a fundamental challenge:
 - **No pre-disease baselines exist**: Patients typically do not undergo MRI scans before tumor development
 - **High anatomical variability**: Each patient's brain structure is unique, making generic healthy brain templates unsuitable
-- **Need for patient-specific reconstruction**: A personalized approach is required to generate realistic healthy brain images
+- **Need for patient-specific reconstruction**: A personalized approach is required to generate realistic pseudo-healthy brain images
 
 ## 💡 Our Approach
 
 Previous methods for tumor removal in brain MRI often fail to preserve anatomical structures. We developed **BrainNormalizer**, a novel framework that leverages **Canny Edge Maps** with **ControlNet** to:
 - ✨ Remove tumor regions from diseased brain MRI
-- 🔧 Reconstruct healthy tissue while **preserving patient-specific anatomical structures**
+- 🔧 Reconstruct pseudo-healthy tissue while **preserving patient-specific anatomical structures**
 - 🎨 Utilize edge conditioning to maintain structural integrity during inpainting
 
 > **🔑 Key Innovation:** Our method exploits the domain knowledge that **healthy brains are roughly symmetric**, using flipped edge maps as structural guidance for the generation process.
@@ -238,7 +240,7 @@ checkpoints/controlnet/{experiment_id}/
 
 ---
 
-### **Stage 3️⃣: Healthy Brain Image Generation**
+### **Stage 3️⃣: Pseudo-Healthy Brain Image Generation**
 
 <p align="center">
   <img src="assets/images/figure_inference-1.png" width="800"/>
@@ -247,11 +249,11 @@ checkpoints/controlnet/{experiment_id}/
 **Script:** `generate_controlnet.py`
 
 **Purpose:**  
-Generate patient-specific healthy brain images by:
+Generate patient-specific pseudo-healthy brain images by:
 1. **Input**: Tumor-bearing MRI image
-2. **Prompt Reversal**: Use "healthy brain" prompt (opposite of training)
+2. **Prompt Reversal**: Use "pseudo-healthy brain" prompt (opposite of training)
 3. **⭐ Edge Flipping**: Flip edge map vertically to provide contralateral hemisphere guidance
-4. **Inpainting**: Generate healthy tissue in tumor region while preserving structure
+4. **Inpainting**: Generate pseudo-healthy tissue in tumor region while preserving structure
 
 > **💎 Key Innovation:**  
 > We exploit the **approximate bilateral symmetry** of healthy brains. By flipping the edge map, we provide structural guidance from the healthy hemisphere to reconstruct the tumor-affected region.
@@ -297,7 +299,7 @@ python generate_controlnet.py \
 1. **Load Models**: VAE, Text Encoder, fine-tuned UNet, and ControlNet
 2. **Process Each Tumor Slice**:
    - Load original tumor image, segmentation mask, and edge map
-   - **Reverse prompt** from "tumor" → "healthy"
+   - **Reverse prompt** from "tumor" → "pseudo-healthy"
    - **Flip edge map** vertically (left ↔ right hemisphere)
    - Generate with both **default mask** and **expanded mask** (smoother transitions)
 3. **Save Results**: Generated images (numpy arrays) and visualization plots
@@ -411,7 +413,7 @@ python finetune_ldm.py --config yaml/ldm_inpaint.yaml
 # First, update yaml/controlnet.yaml with your LDM checkpoint ID
 python train_controlnet.py --config yaml/controlnet.yaml
 
-# 4. Generate healthy images (Stage 3)
+# 4. Generate pseudo-healthy images (Stage 3)
 # Update yaml/generate_controlnet.yaml with your ControlNet checkpoint ID
 python generate_controlnet.py --config yaml/generate_controlnet.yaml
 ```
@@ -425,7 +427,7 @@ python generate_controlnet.py --config yaml/generate_controlnet.yaml
 ```python
 # In generate_controlnet.py
 edge = data['edge']                    # Extract edge map from tumor image
-prompt = reverse_prompt(prompt)        # "tumor" → "healthy"
+prompt = reverse_prompt(prompt)        # "tumor" → "pseudo-healthy"
 edge = torch.flip(edge, dims=[1])      # ⭐ Flip horizontally (left ↔ right)
 
 # Generate with flipped structural guidance
