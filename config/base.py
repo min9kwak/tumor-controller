@@ -130,7 +130,6 @@ class ConfigBase(object):
     @staticmethod
     def ddp_parser() -> argparse.ArgumentParser:
         parser = argparse.ArgumentParser("Data Distributed Training", add_help=False)
-        parser.add_argument('--server', type=str, default='psc', choices=('local', 'psc'))
         parser.add_argument('--pin_memory', type=str2bool, default=False)
         return parser
 
@@ -221,8 +220,9 @@ class ConfigBase(object):
                             help="Cross-attention dimension for the UNet model.")
         parser.add_argument('--tokenizer_name', type=str, default=None,
                             help="Pretrained tokenizer name or path if not the same as model_name")
-        parser.add_argument('--cache_dir', type=str, default="/ocean/projects/med230010p/mkwak/models",
-                            help="Path to the directory where the downloaded models and datasets will be stored.")
+        parser.add_argument('--cache_dir', type=str, default=None,
+                            help="Path to the directory where the downloaded models and datasets will be stored. "
+                                 "If not set, uses CACHE_DIR from .env file.")
         
         return parser
 

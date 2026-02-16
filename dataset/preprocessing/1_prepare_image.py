@@ -1,4 +1,6 @@
-import os
+import sys, os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+
 import json
 import pickle
 import tqdm
@@ -11,7 +13,7 @@ from utils.util import set_env
 
 
 # set directory
-config = set_env(config={'server': 'psc'})
+config = set_env(config={})
 brats_dir = os.path.join(os.path.dirname(config['data_root']), 'BraTS/MICCAI_BraTS2020_TrainingData/MICCAI_BraTS2020_TrainingData')
 tumor_out_dir = os.path.join(config['data_root'], "tumor")
 normal_out_dir = os.path.join(config['data_root'], "healthy")

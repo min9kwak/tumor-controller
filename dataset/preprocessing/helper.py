@@ -133,8 +133,7 @@ if __name__ == '__main__':
     
     
     # 0. set environment
-    config = {'server': 'psc',
-              'proportion_empty_prompts': 0.0,
+    config = {'proportion_empty_prompts': 0.0,
               'modality': 't2',
               'n_splits': 10,
               'fold_index': 0,

@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH -A med230010p
+#SBATCH -A med250011p
 #SBATCH -J generate_controlnet
 #SBATCH -p GPU-shared
 #SBATCH --gres=gpu:1             # ✅ 아무 GPU 1개 요청 (권장 테스트용)

@@ -1,36 +1,28 @@
 import argparse
-from typing import Union, List
+import os
+from typing import Union
+
+from dotenv import load_dotenv
 
 
 def set_env(config: Union[dict, argparse.Namespace], server: str = None) -> Union[dict, argparse.Namespace]:
-    # set get and set for dict and argparse.Namespace
-    def get(key, default=None):
-        if isinstance(config, dict):
-            return config.get(key, default)
-        else:
-            return getattr(config, key, default)
+    load_dotenv()
 
-    def set(key, value):
+    data_root = os.getenv('DATA_ROOT')
+    cache_dir = os.getenv('CACHE_DIR')
+
+    if not data_root or not cache_dir:
+        raise EnvironmentError(
+            "DATA_ROOT and CACHE_DIR must be defined in .env file."
+        )
+
+    def _set(key, value):
         if isinstance(config, dict):
             config[key] = value
         else:
             setattr(config, key, value)
 
-    # set server
-    if server is not None:
-        set('server', server)
-    elif get('server') is None:
-        raise ValueError("server must be provided either as a parameter or in config")    
-    server = get('server')
+    _set('data_root', data_root)
+    _set('cache_dir', cache_dir)
 
-    assert server in ['local', 'psc']
-
-    # set data root
-    if server == 'local':
-        set('data_root', 'D:/data/tumor-controller')
-        set('cache_dir', 'D:/data/tumor-controller/models')
-    elif server == 'psc':
-        set('data_root', '/ocean/projects/med230010p/mkwak/data/tumor-controller')
-        set('cache_dir', '/ocean/projects/med230010p/mkwak/models')
-    
     return config

@@ -2,7 +2,7 @@
 # Training parameters
 train_batch_size: 8
 learning_rate: 5e-4  ################### ControlNet은 보통 더 높은 learning rate 사용
-num_train_epochs: 30 # 20 / 10
+num_train_epochs: 20
 max_train_steps: null
 gradient_accumulation_steps: 4
 gradient_checkpointing: false

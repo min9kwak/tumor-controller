@@ -1,4 +1,6 @@
-import os
+import sys, os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+
 import pandas as pd
 import json
 import tqdm
@@ -6,7 +8,7 @@ from utils.util import set_env
 
 
 # set config
-config = set_env(config={'server': 'psc'})
+config = set_env(config={})
 
 # save metadata
 meta_dir = os.path.join(config['data_root'], 'meta')

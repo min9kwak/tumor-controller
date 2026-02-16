@@ -63,7 +63,7 @@ def main(args: ConfigControlNet):
     # inherit args from ldm_inpaint
     inherit_args = [
         # ddp_parser
-        'server', 'pin_memory',
+        'pin_memory',
         # data_parser
         'modality', 'n_splits', 'fold_index', 'max_train_samples', 'resolution', 'seed', 'proportion_empty_prompts',
         # train_parser

@@ -309,8 +309,7 @@ if __name__ == '__main__':
     from dataset.transforms import create_transforms, brats_collate_fn, create_mask_transforms
 
     # 0. set environment
-    config = {'server': 'psc',
-              'proportion_empty_prompts': 0.5,
+    config = {'proportion_empty_prompts': 0.5,
               'modality': 't1ce+t2',
               'n_splits': 10,
               'fold_index': 0,

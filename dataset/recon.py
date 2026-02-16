@@ -7,12 +7,13 @@ from sklearn.model_selection import train_test_split
 
 from monai.transforms import ToTensor, ScaleIntensity, Compose, Transform
 from collections import defaultdict
+from dotenv import load_dotenv
 
 
 class ReconProcessor(object):
 
     def __init__(self,
-                 data_root: str = 'D:/data/tumor-controller/',
+                 data_root: str = None,
                  healthy_data: str = None,
                  tumor_data: str = None,
                  modality: str = 't2',
@@ -20,6 +21,9 @@ class ReconProcessor(object):
                  test_size: float = 0.1,
                  random_state: int = 2025):
 
+        if data_root is None:
+            load_dotenv()
+            data_root = os.getenv('DATA_ROOT')
         self.data_root = data_root
         self.healthy_data = healthy_data
         self.tumor_data = tumor_data
