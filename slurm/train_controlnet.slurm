@@ -36,7 +36,7 @@ echo "[INFO] printing GPU info"
 nvidia-smi
 
 echo "[INFO] starting Python training"
-python train_controlnet.py
+python train_controlnet.py --ldm_inpaint_hash "2026-02-16_17-36-02"
 if [ $? -ne 0 ]; then
     echo "[ERROR] Python execution failed"; exit 1
 fi

@@ -36,7 +36,7 @@ echo "[INFO] printing GPU info"
 nvidia-smi
 
 echo "[INFO] checking DDIM directory"
-DDIM_DIR="/ocean/projects/med230010p/mkwak/normal-brain-recon/image_generation/2025-09-27_17-43-02/ddim"
+DDIM_DIR="/ocean/projects/med230010p/mkwak/normal-brain-recon/image_generation/2026-02-18_00-09-00/ddim"
 if [ -d "$DDIM_DIR" ]; then
     echo "[INFO] DDIM directory found: $DDIM_DIR"
     DDIM_COUNT=$(ls -1 "$DDIM_DIR"/*.npy 2>/dev/null | wc -l)
@@ -48,7 +48,7 @@ fi
 
 echo "[INFO] starting ControlNet image generation with DDIM integration"
 python generate_controlnet.py \
-  --controlnet-id "2025-08-08_18-52-26" \
+  --controlnet-id "2026-02-17_05-58-10" \
   --num-steps 50 \
   --strength 1.0 \
   --guidance-scale 7.5 \
@@ -57,7 +57,7 @@ python generate_controlnet.py \
   --expanded-threshold 0.05 \
   --ddim-image-dir "$DDIM_DIR"
 # python generate_controlnet.py \
-#   --controlnet-id "2025-08-08_18-52-26" \
+#   --controlnet-id "2026-02-17_05-58-10" \
 #   --num-steps 40 \
 #   --strength 1.0 \
 #   --guidance-scale 7.5 \

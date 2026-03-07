@@ -144,6 +144,7 @@ image_generation/
 generated_images.zip
 tmp/
 depr/
+revision/
 
 # IDE
 .vscode

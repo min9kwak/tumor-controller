@@ -25,8 +25,8 @@ class BraTSProcessor(object):
         self.tokenizer = tokenizer
         self.prompt_builder = prompt_builder
 
-        assert self.config['modality'] in ['t1ce', 't2', 't1ce+t2'], \
-            "modality must be one of ['t1ce', 't2', 't1ce+t2']"
+        assert self.config['modality'] in ['t1ce', 't2', 't1', 't1ce+t2', 't1+t2'], \
+            "modality must be one of ['t1ce', 't2', 't1', 't1ce+t2', 't1+t2']"
         assert self.config['proportion_empty_prompts'] >= 0 and self.config['proportion_empty_prompts'] <= 1, \
             "proportion_empty_prompts must be between 0 and 1"
         assert self.config['n_splits'] > 1, \

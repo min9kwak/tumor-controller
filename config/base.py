@@ -137,7 +137,7 @@ class ConfigBase(object):
     def data_parser() -> argparse.ArgumentParser:
         """Returns an `argparse.ArgumentParser` instance containing data-related arguments."""
         parser = argparse.ArgumentParser("Data", add_help=False)
-        parser.add_argument('--modality', type=str, default='t1ce+t2', choices=('t1ce', 't2', 't1ce+t2'),
+        parser.add_argument('--modality', type=str, default='t1ce+t2', choices=('t1ce', 't2', 't1', 't1ce+t2', 't1+t2'),
                             help="The modality of the dataset to train on.")
         parser.add_argument('--n_splits', type=int, default=10,
                             help="The number of splits for the dataset.")

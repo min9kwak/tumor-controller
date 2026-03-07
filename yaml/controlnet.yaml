@@ -37,6 +37,7 @@ num_validation_samples: 6
 # Logging parameters
 logging_steps: 50
 checkpointing_steps: 1000
+checkpoints_total_limit: 2
 
 # Optimization parameters
 lr_scheduler: "cosine" ############# cosine
